@@ -1,0 +1,6 @@
+[submodule "writing-a-c-compiler-tests"]
+	path = writing-a-c-compiler-tests
+	url = https://github.com/nlsandler/writing-a-c-compiler-tests.git
+[submodule "testing"]
+	path = testing
+	url = https://github.com/nlsandler/writing-a-c-compiler-tests.git
