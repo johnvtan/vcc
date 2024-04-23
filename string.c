@@ -31,28 +31,30 @@ String* string_from(const char* s) {
 }
 
 String* string_copy(const String* s) {
-  String* ret = string_new();
-  for (size_t i = 0; i < s->len; i++) {
-    string_append(ret, string_get(s, i));
-  }
-  return ret;
+  Vec* v = vec_new_cap(sizeof(char), s->len);
+  v->len = s->len;
+  memcpy(v->data, s->data, s->len);
+  return (String*)v;
 }
 
-const String* string_view_from(String* s, size_t start, size_t len) {
+String* string_substring(const String* s, size_t start, size_t len) {
+  assert(len);
   assert(start + len <= s->len);
-  String* view = calloc(1, sizeof(Vec));
 
-  // having a capacity of 0 means it's a view
-  view->cap = 0;
-  view->data = &s->data[start];
-  view->len = len;
-  view->item_size = sizeof(char);
+  Vec* v = vec_new_cap(sizeof(char), len + 1);
 
-  return view;
+  v->len = len;
+  memcpy(v->data, &s->data[start], len);
+
+  vec_push(v, &kNc);
+
+  assert(v->len == len + 1);
+
+  return (String*)v;
 }
 
 void string_append(String* s, char c) {
-  assert(!string_is_view(s));
+  size_t initial_len = s->len;
   Vec* v = (Vec*)s;
 
   assert(v->len && *(char*)vec_back(v) == kNc);
@@ -65,6 +67,8 @@ void string_append(String* s, char c) {
 
   // Then push the new null character.
   vec_push(v, &kNc);
+
+  assert(s->len == initial_len + 1);
 }
 
 char string_get(const String* s, size_t i) {
@@ -137,5 +141,3 @@ String* string_format(const char* fmt, ...) {
 
   return string_from(buf);
 }
-
-bool string_is_view(const String* s) { return s->cap == 0; }

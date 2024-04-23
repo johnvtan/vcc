@@ -23,14 +23,8 @@ String* string_from(const char* s);
 // Copies a string
 String* string_copy(const String* s);
 
-// Returns a view into another string
-const String* string_view_from(String* s, size_t start, size_t len);
-
-// Returns a view from another view
-static inline const String* sub_string_view(const String* s, size_t start,
-                                            size_t len) {
-  return string_view_from((String*)s, start, len);
-}
+// Copies s[start:start+len] into a new string.
+String* string_substring(const String* s, size_t start, size_t len);
 
 // Append a character to s
 void string_append(String* s, char c);

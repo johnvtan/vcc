@@ -63,15 +63,6 @@ void test_format(void) {
   assert(string_eq2(s, "a:-1 b:5 c:butt"));
 }
 
-void test_view(void) {
-  String* s = string_from(cstr);
-  const String* view = string_view_from(s, 5, s->len - 5);
-
-  for (size_t i = 0; i < view->len; i++) {
-    assert(string_get(view, i) == string_get(s, i + 5));
-  }
-}
-
 void test_begins(void) {
   String* s = string_from(cstr);
   assert(string_begins(s, "abc") == 3);
@@ -89,6 +80,26 @@ void test_begins(void) {
   assert(string_begins(e, "") == 0);
 }
 
+void test_substring(void) {
+  String* s = string_from("abcdefg");
+
+  String* ss1 = string_substring(s, 0, 3);
+  assert(string_eq2(ss1, "abc"));
+
+  String* ss2 = string_substring(s, 1, 4);
+  assert(string_eq2(ss2, "bcde"));
+
+  String* ss3 = string_substring(s, 5, 2);
+  assert(string_eq2(ss3, "fg"));
+}
+
+void test_copy(void) {
+  String* s1 = string_from(cstr);
+  String* s2 = string_copy(s1);
+  assert(string_eq(s1, s2));
+  assert(string_eq2(s2, cstr));
+}
+
 int main(void) {
   test_append();
   test_from();
@@ -97,6 +108,8 @@ int main(void) {
   test_eq();
   test_format();
   test_begins();
+  test_substring();
+  test_copy();
   printf("string test completed\n");
   return 0;
 }

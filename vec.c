@@ -27,9 +27,19 @@ Vec* vec_new(size_t item_size) {
   return ret;
 }
 
+Vec* vec_new_cap(size_t item_size, size_t cap) {
+  Vec* ret = calloc(1, sizeof(Vec));
+  vec_init_cap(ret, item_size, cap);
+  return ret;
+}
+
 void vec_init(Vec* v, size_t item_size) {
-  assert(v && item_size);
-  v->cap = VEC_INIT_CAP;
+  vec_init_cap(v, item_size, VEC_INIT_CAP);
+}
+
+void vec_init_cap(Vec* v, size_t item_size, size_t cap) {
+  assert(v && item_size && cap);
+  v->cap = cap;
   v->item_size = item_size;
   v->data = calloc(v->cap, v->item_size);
   assert(v->data);

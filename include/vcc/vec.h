@@ -27,8 +27,15 @@ typedef struct {
 // and an initial capacity of VEC_INIT_CAP.
 Vec* vec_new(size_t item_size);
 
+// Creates a new vector with the given item_size
+// and an initial capacity.
+Vec* vec_new_cap(size_t item_size, size_t cap);
+
 // Initializes a vector
 void vec_init(Vec* v, size_t item_size);
+
+// Initializes a new vector with given capacity.
+void vec_init_cap(Vec* v, size_t item_size, size_t cap);
 
 // Pushes an item onto the end of the vector, reallocating
 // if necessary.
