@@ -2,6 +2,7 @@
 #define VCC_STRING_H
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <vcc/vec.h>
 
 // Strings are just vectors with extra helpers
@@ -50,6 +51,7 @@ size_t string_begins(const String* s1, const char* s2);
 // Like sprintf, but returns a String.
 String* string_format(const char* fmt, ...);
 
-bool string_is_view(const String* s);
+// Reads the the data from the (already open) fp into a String*.
+String* string_from_file(FILE* fp);
 
 #endif

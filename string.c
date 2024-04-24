@@ -141,3 +141,27 @@ String* string_format(const char* fmt, ...) {
 
   return string_from(buf);
 }
+
+String* string_from_file(FILE* fp) {
+  assert(fp);
+
+  // Find length of file by seeking to end.
+  assert(fseek(fp, 0, SEEK_END) == 0);
+  int len = ftell(fp);
+  assert(len > 0);
+
+  // rewind to beginning of file.
+  assert(fseek(fp, 0, SEEK_SET) == 0);
+
+  Vec* v = vec_new_cap(sizeof(char), len + 1);
+  v->len = len;
+
+  // Read everything in the stream
+  assert(fread(v->data, v->item_size, v->len, fp) == v->len);
+
+  // TODO: am I terminating right here?
+  vec_push(v, &kNc);
+  assert(v->len == (size_t)len + 1);
+
+  return (String*)v;
+}
