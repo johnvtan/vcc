@@ -56,7 +56,7 @@ CompilerArgs parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   CompilerArgs args = parse_args(argc, argv);
-  printf("%s, stage: %d", args.input, args.stage);
+  printf("%s, stage: %d\n", args.input, args.stage);
 
   return 0;
 }
