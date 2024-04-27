@@ -26,11 +26,13 @@ if __name__ == '__main__':
 
     # TODO: there's gotta be a better way
     vcc_cli_arg = ""
+    emit = False 
     if args.lex: vcc_cli_arg = "--lex"
     elif args.parse: vcc_cli_arg = "--parse"
     elif args.codegen: vcc_cli_arg = "--codegen"
+    else: emit = True
 
     run(f'./bin/vcc {vcc_cli_arg} {pp_file.name} {asm_file.name}', check=True, shell=True)
 
-    run(f'gcc {asm_file.name} -o {basename}', check=True, shell=True)
-
+    if emit:
+        run(f'gcc {asm_file.name} -o {basename}', check=True, shell=True)

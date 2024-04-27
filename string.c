@@ -1,7 +1,6 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <vcc/string.h>
 
@@ -71,9 +70,11 @@ void string_append(String* s, char c) {
   assert(s->len == initial_len + 1);
 }
 
-char string_get(const String* s, size_t i) {
+char string_get(const String* s, size_t i) { return *string_at(s, i); }
+
+const char* string_at(const String* s, size_t i) {
   assert(i <= string_len(s));
-  return *(char*)(vec_get((Vec*)s, i));
+  return (char*)(vec_get((Vec*)s, i));
 }
 
 size_t string_len(const String* s) {
@@ -115,18 +116,21 @@ bool string_eq2(const String* s1, const char* s2) {
 
 size_t string_begins(const String* s1, const char* s2) {
   assert(s1 && s2 && s1->len);
+  return string_begins2(s1->data, s2);
+}
+
+size_t string_begins2(const char* s1, const char* s2) {
+  assert(s1 && s2);
 
   int matched = 0;
-  size_t len = string_len(s1);
-  const char* c1 = s1->data;
-
-  while (len--) {
-    if (*s2 == '\0') return matched;
-    if (*c1++ != *s2++) return 0;
+  while (*s2 != '\0') {
+    // I'm not sure if this check is needed or if it's already handled by the
+    // second check.
+    if (*s1 == '\0') return 0;
+    if (*s1++ != *s2++) return 0;
     matched++;
   }
-
-  return *s2 == '\0' ? matched : 0;
+  return matched;
 }
 
 #define MAX_FMT_LEN (1024U)

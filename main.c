@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <vcc/lex.h>
 #include <vcc/string.h>
 
 static const struct option long_options[] = {
@@ -27,6 +28,7 @@ CompilerArgs parse_args(int argc, char** argv) {
   // By default emit code
   CompilerArgs args = {.stage = EMIT};
 
+  // Note: options will override each other, so the last one wins.
   char ch;
   while ((ch = getopt_long(argc, argv, "l:p:c:", long_options, NULL)) != -1) {
     switch (ch) {
@@ -56,7 +58,16 @@ CompilerArgs parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   CompilerArgs args = parse_args(argc, argv);
-  printf("%s, stage: %d\n", args.input, args.stage);
+
+  FILE* input_fp = fopen(args.input, "r");
+  assert(input_fp);
+
+  String* input = string_from_file(input_fp);
+
+  Vec* tokens = lex(input);
+  if (!tokens) {
+    return -1;
+  }
 
   return 0;
 }

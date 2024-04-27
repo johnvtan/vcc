@@ -33,6 +33,9 @@ void string_append(String* s, char c);
 // Gets i-th character in s.
 char string_get(const String* s, size_t i);
 
+// Gets a pointer into the string starting at pos |i|.
+const char* string_at(const String* s, size_t i);
+
 size_t string_len(const String* s);
 
 // Returns a null terminated string
@@ -47,6 +50,10 @@ bool string_eq2(const String* s1, const char* s2);
 // Checks that s1 begins with s2
 // Returns the length of s2 on success, 0 otherwise.
 size_t string_begins(const String* s1, const char* s2);
+
+// Checks that s1 begins with s2.
+// Assumes that they are both null terminated strings.
+size_t string_begins2(const char* s1, const char* s2);
 
 // Like sprintf, but returns a String.
 String* string_format(const char* fmt, ...);
