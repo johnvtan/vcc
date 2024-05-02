@@ -69,34 +69,10 @@ static inline bool is_ident_char(char c) {
   return false;
 }
 
-//
-// Lexing context
-// Note: this is exactly the same as ErrorContext right now, but I'll keep them
-// separate in case they diverge.
-//
-typedef struct {
-  const String* input;
-  int idx;
-  int line;
-  int col;
-} Context;
-
-static bool has_more(const Context* cx) {
-  return (size_t)cx->idx < string_len(cx->input);
-}
-
-// Peeks the input at |n| characters after the current |idx| in |cx|.
-static inline char peek_char_at(const Context* cx, size_t n) {
-  assert(has_more(cx));
-  return string_get(cx->input, cx->idx + n);
-}
-
-static inline char peek_char(const Context* cx) { return peek_char_at(cx, 0); }
-
-static size_t find_next_whitespace(const Context* cx) {
+static size_t find_next_whitespace(const FilePos* pos) {
   size_t n = 0;
-  while (has_more(cx)) {
-    if (is_whitespace(peek_char_at(cx, n))) {
+  while (!file_pos_is_eof(pos)) {
+    if (is_whitespace(file_pos_peek_char_at(pos, n))) {
       break;
     }
     n++;
@@ -105,16 +81,10 @@ static size_t find_next_whitespace(const Context* cx) {
   return n;
 }
 
-static void advance_context_by_token(Context* cx, const Token* t) {
+static void advance_position_by_token(FilePos* pos, const Token* t) {
   size_t tok_len = string_len(t->content);
-  cx->idx += tok_len;
-  cx->col += tok_len;
-}
-
-static ErrorContext to_err_cx(const Context* cx) {
-  ErrorContext ret = {
-      .input = cx->input, .idx = cx->idx, .col = cx->col, .line = cx->line};
-  return ret;
+  pos->idx += tok_len;
+  pos->col += tok_len;
 }
 
 //
@@ -125,13 +95,13 @@ static ErrorContext to_err_cx(const Context* cx) {
 // This assumes that |KEYWORD_MATCHES| is sorted by length.
 // Returns false if failed. On failure, |out_token| is unmodified.
 // If successful, |out_token| contains the matched token.
-static bool match_keyword(const Context* cx, Token* out_token) {
-  const char* curr = string_at(cx->input, cx->idx);
+static bool match_keyword(const FilePos* pos, Token* out_token) {
+  const char* curr = string_at(pos->contents, pos->idx);
   for (size_t i = 0; i < NUM_KEYWORDS; i++) {
     if (string_begins2(curr, KEYWORD_MATCHES[i].match)) {
       out_token->ty = KEYWORD_MATCHES[i].ty;
       out_token->content = string_from(KEYWORD_MATCHES[i].match);
-      out_token->err_cx = to_err_cx(cx);
+      out_token->pos = *pos;
       return true;
     }
   }
@@ -141,14 +111,15 @@ static bool match_keyword(const Context* cx, Token* out_token) {
 // Matches a token the longest substring of |is_ident_char| characters.
 // Explicitly checks that the first character is NOT a number to avoid
 // accidentally matching numeric constants.
-static bool match_ident(const Context* cx, Token* out_token) {
-  assert(out_token && cx);
-  if (is_num(peek_char(cx))) {
+static bool match_ident(const FilePos* pos, Token* out_token) {
+  assert(out_token && pos);
+  if (is_num(file_pos_peek_char(pos))) {
     return 0;
   }
 
   size_t n = 0;
-  while (has_more(cx) && is_ident_char(peek_char_at(cx, n))) {
+  while (!file_pos_is_eof(pos) &&
+         is_ident_char(file_pos_peek_char_at(pos, n))) {
     n++;
   }
 
@@ -158,70 +129,70 @@ static bool match_ident(const Context* cx, Token* out_token) {
 
   // At input[n] is the first non-ident char
   out_token->ty = TK_IDENT;
-  out_token->err_cx = to_err_cx(cx);
-  out_token->content = string_substring(cx->input, cx->idx, n);
+  out_token->pos = *pos;
+  out_token->content = string_substring(pos->contents, pos->idx, n);
   return true;
 }
 
-static bool match_num_constant(const Context* cx, Token* out_token) {
+static bool match_num_constant(const FilePos* pos, Token* out_token) {
   size_t n = 0;
-  while (has_more(cx) && is_num(peek_char_at(cx, n))) {
+  while (!file_pos_is_eof(pos) && is_num(file_pos_peek_char_at(pos, n))) {
     n++;
   }
 
   // TODO: we have to check that the number ends at a word boundary.
   // Currently we check this by looking at the next character and seeing if it's
   // part of some malformed ident, but is this the right way to check?
-  if (!n || is_ident_char(peek_char_at(cx, n))) {
+  if (!n || is_ident_char(file_pos_peek_char_at(pos, n))) {
     return false;
   }
 
   out_token->ty = TK_NUM_CONST;
-  out_token->err_cx = to_err_cx(cx);
-  out_token->content = string_substring(cx->input, cx->idx, n);
+  out_token->pos = *pos;
+  out_token->content = string_substring(pos->contents, pos->idx, n);
   return true;
 }
 
 Vec* lex(const String* input) {
   sort_keywords();
 
-  Context cx = {.input = input, .idx = 0, .line = 0, .col = 0};
+  FilePos pos = {.contents = input, .idx = 0, .line = 0, .col = 0};
   Vec* out = vec_new(sizeof(Token));
   bool error = false;
 
-  while (has_more(&cx)) {
-    char c = peek_char(&cx);
+  while (!file_pos_is_eof(&pos)) {
+    char c = file_pos_peek_char(&pos);
     if (is_newline(c)) {
-      cx.line++;
-      cx.col = 0;
-      cx.idx++;
+      pos.line++;
+      pos.col = 0;
+      pos.idx++;
       continue;
     }
 
     if (is_whitespace(c)) {
-      cx.idx++;
-      cx.col++;
+      pos.idx++;
+      pos.col++;
       continue;
     }
 
     Token t = {};
 
-    if (match_keyword(&cx, &t) || match_num_constant(&cx, &t) ||
-        match_ident(&cx, &t)) {
+    if (match_keyword(&pos, &t) || match_num_constant(&pos, &t) ||
+        match_ident(&pos, &t)) {
       vec_push(out, &t);
-      advance_context_by_token(&cx, &t);
+      advance_position_by_token(&pos, &t);
       continue;
     }
 
     // emit error -- should be unreachable
     error = true;
-    emit_error(to_err_cx(&cx), "Unrecognized token");
+    emit_error(&pos, "Unrecognized token");
 
     // Continue lexing at start of next whitespace to emit all errors at this
     // stage at once.
-    size_t n = find_next_whitespace(&cx);
-    cx.idx += n;
-    cx.col += n;
+    size_t n = find_next_whitespace(&pos);
+    pos.idx += n;
+    pos.col += n;
   }
 
   // for (size_t i = 0; i < out->len; i++) {

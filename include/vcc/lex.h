@@ -2,6 +2,7 @@
 #define VCC_LEX_H
 
 #include <vcc/errors.h>
+#include <vcc/file_pos.h>
 #include <vcc/string.h>
 #include <vcc/vec.h>
 
@@ -23,7 +24,7 @@ typedef enum {
 typedef struct {
   TokenType ty;
   String* content;
-  ErrorContext err_cx;
+  FilePos pos;
 } Token;
 
 // Returns a vector of Tokens
