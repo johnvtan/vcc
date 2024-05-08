@@ -6,5 +6,6 @@
 #include <vcc/string.h>
 
 void emit_error(const FilePos* pos, const char* fmt, ...);
+void emit_error_no_pos(const char* fmt, ...);
 
 #endif  // VCC_ERRORS_H

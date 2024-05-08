@@ -23,3 +23,13 @@ void emit_error(const FilePos* pos, const char* fmt, ...) {
 
   va_end(args);
 }
+
+void emit_error_no_pos(const char* fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+
+  fprintf(stderr, RED "error: " RESET_COLOR);
+  vfprintf(stderr, fmt, args);
+  fprintf(stderr, "\n");
+  va_end(args);
+}

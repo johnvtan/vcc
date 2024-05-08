@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <vcc/ast.h>
 #include <vcc/lex.h>
 #include <vcc/string.h>
 
@@ -67,6 +68,17 @@ int main(int argc, char** argv) {
   Vec* tokens = lex(input);
   if (!tokens) {
     return -1;
+  }
+  if (args.stage == LEX) {
+    return 0;
+  }
+
+  AstProgram* prog = parse_ast(tokens);
+  if (!prog) {
+    return -1;
+  }
+  if (args.stage == PARSE) {
+    return 0;
   }
 
   return 0;
