@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <vcc/ast.h>
+#include <vcc/gen_x64.h>
 #include <vcc/lex.h>
 #include <vcc/string.h>
 
@@ -78,6 +79,14 @@ int main(int argc, char** argv) {
     return -1;
   }
   if (args.stage == PARSE) {
+    return 0;
+  }
+
+  x64_Program* x64_prog = generate_x86(prog);
+  if (!x64_prog) {
+    return -1;
+  }
+  if (args.stage == CODEGEN) {
     return 0;
   }
 
