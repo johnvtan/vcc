@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <vcc/ast.h>
+#include <vcc/emit_x64.h>
 #include <vcc/gen_x64.h>
 #include <vcc/lex.h>
 #include <vcc/string.h>
@@ -90,5 +91,5 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  return 0;
+  return emit_x64(x64_prog, args.output);
 }

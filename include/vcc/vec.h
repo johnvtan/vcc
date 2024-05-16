@@ -64,4 +64,17 @@ void vec_set(Vec* vec, size_t n, void* item);
 // Concatenates v2 onto the end of v1
 void vec_concat(Vec* v1, Vec* v2);
 
+// Macro for iterating over the elements of a vector.
+// Creates a loop variable called |iter| that contains a pointer to the item
+// and the current index |iter.i|.
+// The user defines the name of the item in |iter| through the |item| parameter.
+#define vec_for_each(vec, item_type, item) \
+  for (                                    \
+      struct {                             \
+        size_t i;                          \
+        item_type* item;                   \
+      } iter = {0, vec_get(vec, 0)};       \
+      iter.i < vec->len;                   \
+      ++iter.i, iter.item = (item_type*)vec_get(vec, iter.i))
+
 #endif
