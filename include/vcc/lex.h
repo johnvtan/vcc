@@ -16,6 +16,9 @@ typedef enum {
   TK_OPEN_BRACE,
   TK_CLOSE_BRACE,
   TK_SEMICOLON,
+  TK_TILDE,
+  TK_DASH,
+  TK_DASHDASH,
 
   TK_IDENT,
   TK_NUM_CONST,

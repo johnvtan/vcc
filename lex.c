@@ -15,8 +15,8 @@ typedef struct {
 static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_INT, "int"},       {TK_VOID, "void"},     {TK_RETURN, "return"},
     {TK_OPEN_PAREN, "("},  {TK_CLOSE_PAREN, ")"}, {TK_OPEN_BRACE, "{"},
-    {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},
-};
+    {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},   {TK_TILDE, "~"},
+    {TK_DASH, "-"},        {TK_DASHDASH, "--"}};
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
 
