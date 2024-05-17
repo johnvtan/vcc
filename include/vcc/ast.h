@@ -9,15 +9,25 @@
 //
 typedef enum {
   EXPR_CONST,
+  EXPR_UNARY,
 } AstExprType;
 
-typedef struct {
+typedef struct AstExpr {
   AstExprType ty;
   union {
     // EXPR_CONST
     struct {
       int imm;
     } constant;
+
+    // EXPR_UNARY
+    struct {
+      enum {
+        UNARY_NEG,
+        UNARY_COMPLEMENT,
+      } op;
+      struct AstExpr* expr;
+    } unary;
   };
 } AstExpr;
 

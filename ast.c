@@ -32,24 +32,24 @@ static Token peek(ParseContext* cx) {
     Token t = peek(cx_tmp);        \
     emit_error(&t.pos, args);      \
     cx_tmp->err = true;            \
+    cx_tmp->idx++;                 \
   } while (0);
 
 // Return the current token and advances |cx|.
-// static Token consume(ParseContext* cx) {
-//   Token t = peek(cx);
-//   cx->idx++;
-//   return t;
-// }
+static Token consume(ParseContext* cx) {
+  Token t = peek(cx);
+  cx->idx++;
+  return t;
+}
 
 static bool match(ParseContext* cx, TokenType ty) { return peek(cx).ty == ty; }
 
 // Emits an error if the current token doesn't match |ty|.
-// Advances |cx| and returns the current token either way.
+// If there
 static Token expect(ParseContext* cx, TokenType ty) {
   Token curr = peek(cx);
   if (curr.ty != ty) {
-    emit_error(&curr.pos, "Expected token %lu but got %lu", ty, curr.ty);
-    cx->err = true;
+    emit_error_at(cx, "Expected token %lu but got %lu", ty, curr.ty)
   }
   cx->idx++;
   return curr;
@@ -79,18 +79,47 @@ static AstExpr* expr(AstExprType ty) {
 //
 // Recursive descent parsing functions
 //
-static AstExpr* parse_constant(ParseContext* cx) {
-  Token t = expect(cx, TK_NUM_CONST);
-  AstExpr* e = expr(EXPR_CONST);
-  e->constant.imm = strtol(cstring(t.content), NULL, 10);
-  return e;
+static AstExpr* parse_expr(ParseContext* cx) {
+  if (match(cx, TK_NUM_CONST)) {
+    Token t = consume(cx);
+    AstExpr* e = expr(EXPR_CONST);
+    e->constant.imm = strtol(cstring(t.content), NULL, 10);
+    return e;
+  }
+
+  if (match(cx, TK_TILDE)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_COMPLEMENT;
+    e->unary.expr = parse_expr(cx);
+    return e;
+  }
+
+  if (match(cx, TK_DASH)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_NEG;
+    e->unary.expr = parse_expr(cx);
+    return e;
+  }
+
+  if (match(cx, TK_OPEN_PAREN)) {
+    expect(cx, TK_OPEN_PAREN);
+    AstExpr* e = parse_expr(cx);
+    expect(cx, TK_CLOSE_PAREN);
+    return e;
+  }
+
+  emit_error_at(cx, "Unexpected token when parsing expression: %s",
+                cstring(peek(cx).content));
+  return NULL;
 }
 
 static AstStmt* parse_return(ParseContext* cx) {
   expect(cx, TK_RETURN);
 
   AstStmt* ret = stmt(STMT_RETURN);
-  ret->ret.expr = parse_constant(cx);
+  ret->ret.expr = parse_expr(cx);
 
   return ret;
 }
@@ -102,7 +131,6 @@ static AstNode* parse_stmt(ParseContext* cx) {
     n->stmt = parse_return(cx);
   } else {
     emit_error_at(cx, "Unexpected token when parsing statement");
-    cx->err = true;
     return NULL;
   }
 
@@ -123,7 +151,7 @@ AstNode* parse_function(ParseContext* cx) {
   expect(cx, TK_OPEN_BRACE);
 
   fn->fn.body = parse_stmt(cx);
-  if (fn->fn.body->ty != NODE_STMT) {
+  if (fn->fn.body && fn->fn.body->ty != NODE_STMT) {
     emit_error_at(cx, "Unexpected function body");
   }
   expect(cx, TK_CLOSE_BRACE);
