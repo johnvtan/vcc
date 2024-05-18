@@ -6,18 +6,20 @@
 #include <vcc/ast.h>
 #include <vcc/emit_x64.h>
 #include <vcc/gen_x64.h>
+#include <vcc/ir.h>
 #include <vcc/lex.h>
 #include <vcc/string.h>
 
 static const struct option long_options[] = {
     {"lex", optional_argument, NULL, 'l'},
     {"parse", optional_argument, NULL, 'p'},
+    {"tacky", optional_argument, NULL, 't'},
     {"codegen", optional_argument, NULL, 'c'},
     {0},
 };
 
 typedef struct {
-  enum { LEX, PARSE, CODEGEN, EMIT } stage;
+  enum { LEX, PARSE, TACKY, CODEGEN, EMIT } stage;
   char* input;
   char* output;
 } CompilerArgs;
@@ -40,6 +42,9 @@ CompilerArgs parse_args(int argc, char** argv) {
         continue;
       case 'p':
         args.stage = PARSE;
+        continue;
+      case 't':
+        args.stage = TACKY;
         continue;
       case 'c':
         args.stage = CODEGEN;
@@ -83,13 +88,21 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  x64_Program* x64_prog = generate_x86(prog);
-  if (!x64_prog) {
+  IrProgram* ir_prog = gen_ir(prog);
+  if (!ir_prog) {
     return -1;
   }
-  if (args.stage == CODEGEN) {
+  if (args.stage == TACKY) {
     return 0;
   }
 
-  return emit_x64(x64_prog, args.output);
+  // x64_Program* x64_prog = generate_x86(prog);
+  // if (!x64_prog) {
+  //  return -1;
+  //}
+  // if (args.stage == CODEGEN) {
+  //  return 0;
+  //}
+
+  // return emit_x64(x64_prog, args.output);
 }

@@ -7,6 +7,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--lex", help="Run up to lexer", action="store_true")
     parser.add_argument("--parse", help="Run up to parser", action="store_true")
+    parser.add_argument("--tacky", help="Run up to tacky", action="store_true")
     parser.add_argument("--codegen", help="Run up to codegen", action="store_true")
     parser.add_argument("--asm_file", help="assembly file", default=None)
     parser.add_argument("input_file", help="File to compiler")
@@ -30,6 +31,7 @@ if __name__ == '__main__':
     emit = False 
     if args.lex: vcc_cli_arg = "--lex"
     elif args.parse: vcc_cli_arg = "--parse"
+    elif args.tacky: vcc_cli_arg = "--tacky"
     elif args.codegen: vcc_cli_arg = "--codegen"
     else: emit = True
 
