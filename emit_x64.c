@@ -25,12 +25,20 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
       break;
     }
     case X64_OP_REG: {
-      emit(cx, "%%eax");
+      static const char* reg_map[] = {
+          [REG_AX] = "eax",
+          [REG_R10] = "r10d",
+      };
+
+      emit(cx, "%%%s", reg_map[op->reg]);
+      break;
+    }
+    case X64_OP_STACK: {
+      emit(cx, "%d(%%rbp)", op->stack);
       break;
     }
     default:
-      emit_error_no_pos("Unrecognized x64 operand %lu", op->ty);
-      assert(false);
+      panic("Unrecognized x64 operand %lu", op->ty);
   }
 }
 
@@ -54,11 +62,26 @@ static void emit0(Context* cx, const char* inst) { emit(cx, "\t%s\n", inst); }
 static void emit_inst(Context* cx, x64_Instruction* inst) {
   switch (inst->ty) {
     case X64_RET: {
+      // Function epilogue
+      emit(cx, "\tmovq %%rbp, %%rsp\n");
+      emit(cx, "\tpopq %%rbp\n");
       emit0(cx, "ret");
       break;
     }
     case X64_MOV: {
-      emit2(cx, "mov", inst->r1, inst->r2);
+      emit2(cx, "movl", inst->r1, inst->r2);
+      break;
+    }
+    case X64_NEG: {
+      emit1(cx, "negl", inst->r1);
+      break;
+    }
+    case X64_NOT: {
+      emit1(cx, "notl", inst->r1);
+      break;
+    }
+    case X64_ALLOC_STACK: {
+      emit(cx, "\tsubq $%d, %%rsp\n", inst->stack);
       break;
     }
     default:
@@ -75,7 +98,10 @@ static void emit_label(Context* cx, const String* label, bool global) {
 }
 
 static void emit_function(Context* cx, x64_Function* fn) {
+  // Function prologue
   emit_label(cx, fn->name, true);
+  emit(cx, "\tpushq %%rbp\n");
+  emit(cx, "\tmovq %%rsp, %%rbp\n");
   vec_for_each(fn->instructions, x64_Instruction, instr) {
     emit_inst(cx, iter.instr);
   }

@@ -104,7 +104,6 @@ int main(int argc, char** argv) {
   if (args.stage == CODEGEN) {
     return 0;
   }
-  return 0;
 
-  // return emit_x64(x64_prog, args.output);
+  return emit_x64(x64_prog, args.output);
 }
