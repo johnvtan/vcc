@@ -58,7 +58,7 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       break;
     }
     case X64_MOV: {
-      emit2(cx, "mov", &inst->mov.src, &inst->mov.dst);
+      emit2(cx, "mov", inst->r1, inst->r2);
       break;
     }
     default:
@@ -76,12 +76,8 @@ static void emit_label(Context* cx, const String* label, bool global) {
 
 static void emit_function(Context* cx, x64_Function* fn) {
   emit_label(cx, fn->name, true);
-  // vec_for_each(fn->instructions, x64_Instruction, instr) {
-  //   emit_inst(cx, iter.instr);
-  // }
-  for (size_t i = 0; i < fn->instructions->len; i++) {
-    x64_Instruction* instr = vec_get(fn->instructions, i);
-    emit_inst(cx, instr);
+  vec_for_each(fn->instructions, x64_Instruction, instr) {
+    emit_inst(cx, iter.instr);
   }
 }
 

@@ -96,13 +96,15 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // x64_Program* x64_prog = generate_x86(prog);
-  // if (!x64_prog) {
-  //  return -1;
-  //}
-  // if (args.stage == CODEGEN) {
-  //  return 0;
-  //}
+  x64_Program* x64_prog = generate_x86(ir_prog);
+  if (!x64_prog) {
+    return -1;
+  }
+
+  if (args.stage == CODEGEN) {
+    return 0;
+  }
+  return 0;
 
   // return emit_x64(x64_prog, args.output);
 }

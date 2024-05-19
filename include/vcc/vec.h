@@ -68,13 +68,14 @@ void vec_concat(Vec* v1, Vec* v2);
 // Creates a loop variable called |iter| that contains a pointer to the item
 // and the current index |iter.i|.
 // The user defines the name of the item in |iter| through the |item| parameter.
-#define vec_for_each(vec, item_type, item) \
-  for (                                    \
-      struct {                             \
-        size_t i;                          \
-        item_type* item;                   \
-      } iter = {0, vec_get(vec, 0)};       \
-      iter.i < vec->len;                   \
-      ++iter.i, iter.item = (item_type*)vec_get(vec, iter.i))
+#define vec_for_each(vec, item_type, item)                                 \
+  for (                                                                    \
+      struct {                                                             \
+        size_t i;                                                          \
+        item_type* item;                                                   \
+      } iter = {0, vec_get(vec, 0)};                                       \
+      iter.i < vec->len; ++iter.i,                                         \
+        iter.item = (iter.i < vec->len) ? (item_type*)vec_get(vec, iter.i) \
+                                        : NULL)
 
 #endif
