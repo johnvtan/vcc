@@ -14,7 +14,9 @@ typedef enum {
 
 typedef enum {
   REG_AX,
+  REG_DX,
   REG_R10,
+  REG_R11,
 } x64_RegType;
 
 typedef struct {
@@ -39,6 +41,11 @@ typedef enum {
   X64_RET,
   X64_NEG,
   X64_NOT,
+  X64_ADD,
+  X64_SUB,
+  X64_MUL,
+  X64_IDIV,
+  X64_CDQ,  // sign extend
   X64_ALLOC_STACK,
 } x64_InstructionType;
 

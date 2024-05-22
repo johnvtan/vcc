@@ -27,7 +27,9 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
     case X64_OP_REG: {
       static const char* reg_map[] = {
           [REG_AX] = "eax",
+          [REG_DX] = "edx",
           [REG_R10] = "r10d",
+          [REG_R11] = "r11d",
       };
 
       emit(cx, "%%%s", reg_map[op->reg]);
@@ -78,6 +80,26 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
     }
     case X64_NOT: {
       emit1(cx, "notl", inst->r1);
+      break;
+    }
+    case X64_ADD: {
+      emit2(cx, "addl", inst->r1, inst->r2);
+      break;
+    }
+    case X64_SUB: {
+      emit2(cx, "subl", inst->r1, inst->r2);
+      break;
+    }
+    case X64_MUL: {
+      emit2(cx, "imull", inst->r1, inst->r2);
+      break;
+    }
+    case X64_IDIV: {
+      emit1(cx, "idivl", inst->r1);
+      break;
+    }
+    case X64_CDQ: {
+      emit0(cx, "cdq");
       break;
     }
     case X64_ALLOC_STACK: {

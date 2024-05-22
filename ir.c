@@ -71,15 +71,15 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 //
 // Functions that walk the AST and generate IR instructions
 //
-static IrVal* gen_expr(AstExpr* expr, Vec* out) {
-  switch (expr->ty) {
-    case EXPR_CONST: {
-      return constant(expr->constant.imm);
-    }
-    case EXPR_UNARY: {
-      IrVal* operand = gen_expr(expr->unary.expr, out);
-      IrType unary_op;
-      switch (expr->unary.op) {
+static IrVal* gen_expr(AstExpr* expr, Vec* out);
+static IrVal* gen_fact(AstFactor* f, Vec* out) {
+  switch (f->ty) {
+    case FACT_INT:
+      return constant(f->int_const);
+    case FACT_UNARY: {
+      IrVal* operand = gen_expr(f->unary.expr, out);
+      IrType unary_op = IR_UNKNOWN;
+      switch (f->unary.op) {
         case UNARY_COMPLEMENT:
           unary_op = IR_UNARY_COMPLEMENT;
           break;
@@ -87,10 +87,43 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
           unary_op = IR_UNARY_NEG;
           break;
         default:
-          panic("Unexpected AstStmt type: %lu", expr->unary.op);
+          panic("Unexpected AstStmt type: %lu", f->unary.op);
       }
       IrVal* dst = temp();
       push_inst(out, unary(unary_op, operand, dst));
+      return dst;
+    }
+  }
+}
+static IrVal* gen_expr(AstExpr* expr, Vec* out) {
+  switch (expr->ty) {
+    case EXPR_FACT:
+      return gen_fact(expr->factor, out);
+    case EXPR_BINARY: {
+      IrVal* lhs = gen_expr(expr->binary.lhs, out);
+      IrVal* rhs = gen_expr(expr->binary.rhs, out);
+      IrVal* dst = temp();
+      IrType op = IR_UNKNOWN;
+      switch (expr->binary.op) {
+        case BINARY_ADD:
+          op = IR_ADD;
+          break;
+        case BINARY_SUB:
+          op = IR_SUB;
+          break;
+        case BINARY_DIV:
+          op = IR_DIV;
+          break;
+        case BINARY_MUL:
+          op = IR_MUL;
+          break;
+        case BINARY_REM:
+          op = IR_REM;
+          break;
+        default:
+          panic("Unexpected binary op: %u", expr->binary.op);
+      }
+      push_inst(out, binary(op, lhs, rhs, dst));
       return dst;
     }
     default:

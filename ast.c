@@ -58,6 +58,10 @@ static Token expect(ParseContext* cx, TokenType ty) {
 //
 // Ast type helper funcs
 //
+
+static AstExpr* parse_expr(ParseContext* cx, int min_prec);
+static AstExpr* parse_factor(ParseContext* cx);
+
 static AstNode* node(AstNodeType ty) {
   AstNode* n = calloc(1, sizeof(AstNode));
   n->ty = ty;
@@ -76,50 +80,108 @@ static AstExpr* expr(AstExprType ty) {
   return e;
 }
 
+static AstExpr* expr_factor(AstFactor* f) {
+  AstExpr* e = expr(EXPR_FACT);
+  e->factor = f;
+  return e;
+}
+
+static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
+  AstExpr* e = expr(EXPR_BINARY);
+  e->binary.op = op;
+  e->binary.lhs = lhs;
+  e->binary.rhs = rhs;
+  return e;
+}
+
+static AstFactor* factor(AstFactorType ty) {
+  AstFactor* f = calloc(1, sizeof(AstFactor));
+  f->ty = ty;
+  return f;
+}
+
 //
 // Recursive descent parsing functions
 //
-static AstExpr* parse_expr(ParseContext* cx) {
+static AstExpr* parse_factor(ParseContext* cx) {
   if (match(cx, TK_NUM_CONST)) {
     Token t = consume(cx);
-    AstExpr* e = expr(EXPR_CONST);
-    e->constant.imm = strtol(cstring(t.content), NULL, 10);
-    return e;
+    AstFactor* f = factor(FACT_INT);
+    f->int_const = strtol(cstring(t.content), NULL, 10);
+    return expr_factor(f);
   }
 
   if (match(cx, TK_TILDE)) {
     consume(cx);
-    AstExpr* e = expr(EXPR_UNARY);
-    e->unary.op = UNARY_COMPLEMENT;
-    e->unary.expr = parse_expr(cx);
-    return e;
+    AstFactor* f = factor(FACT_UNARY);
+    f->unary.op = UNARY_COMPLEMENT;
+    f->unary.expr = parse_factor(cx);
+    return expr_factor(f);
   }
 
   if (match(cx, TK_DASH)) {
     consume(cx);
-    AstExpr* e = expr(EXPR_UNARY);
-    e->unary.op = UNARY_NEG;
-    e->unary.expr = parse_expr(cx);
-    return e;
+    AstFactor* f = factor(FACT_UNARY);
+    f->unary.op = UNARY_NEG;
+    f->unary.expr = parse_factor(cx);
+    return expr_factor(f);
   }
 
   if (match(cx, TK_OPEN_PAREN)) {
     expect(cx, TK_OPEN_PAREN);
-    AstExpr* e = parse_expr(cx);
+    AstExpr* e = parse_expr(cx, 0);
     expect(cx, TK_CLOSE_PAREN);
     return e;
   }
 
-  emit_error_at(cx, "Unexpected token when parsing expression: %s",
+  emit_error_at(cx, "Unexpected token when parsing factor: %s",
                 cstring(peek(cx).content));
-  return NULL;
+  exit(-1);
+}
+
+typedef struct {
+  int prec;
+  int op;
+} BinaryInfo;
+
+// For binary operators, returns the BinaryInfo.
+//
+// Returns {-1, -1} if not a binary operator.
+static inline BinaryInfo binary_info(TokenType ty) {
+  switch (ty) {
+    case TK_PLUS:
+      return (BinaryInfo){45, BINARY_ADD};
+    case TK_DASH:
+      return (BinaryInfo){45, BINARY_SUB};
+    case TK_STAR:
+      return (BinaryInfo){50, BINARY_MUL};
+    case TK_SLASH:
+      return (BinaryInfo){50, BINARY_DIV};
+    case TK_PERCENT:
+      return (BinaryInfo){50, BINARY_REM};
+    default:
+      return (BinaryInfo){-1, -1};
+  }
+}
+static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
+  AstExpr* lhs = parse_factor(cx);
+  Token next = peek(cx);
+  BinaryInfo info = binary_info(next.ty);
+  while (info.prec > 0 && info.prec > min_prec) {
+    consume(cx);  // consume the token because it is a bin op
+    AstExpr* rhs = parse_expr(cx, info.prec + 1);
+    lhs = expr_binary(info.op, lhs, rhs);
+    next = peek(cx);
+    info = binary_info(next.ty);
+  }
+  return lhs;
 }
 
 static AstStmt* parse_return(ParseContext* cx) {
   expect(cx, TK_RETURN);
 
   AstStmt* ret = stmt(STMT_RETURN);
-  ret->ret.expr = parse_expr(cx);
+  ret->ret.expr = parse_expr(cx, 0);
 
   return ret;
 }

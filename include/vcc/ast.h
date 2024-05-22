@@ -7,20 +7,22 @@
 //
 // AST expression definition
 //
+
+typedef struct AstFactor AstFactor;
+typedef struct AstExpr AstExpr;
+
 typedef enum {
-  EXPR_CONST,
-  EXPR_UNARY,
-} AstExprType;
+  FACT_INT,
+  FACT_UNARY,
+} AstFactorType;
 
-typedef struct AstExpr {
-  AstExprType ty;
+struct AstFactor {
+  AstFactorType ty;
   union {
-    // EXPR_CONST
-    struct {
-      int imm;
-    } constant;
+    // FACT_INT
+    int int_const;
 
-    // EXPR_UNARY
+    // FACT_UNARY
     struct {
       enum {
         UNARY_NEG,
@@ -29,7 +31,33 @@ typedef struct AstExpr {
       struct AstExpr* expr;
     } unary;
   };
-} AstExpr;
+};
+
+typedef enum {
+  EXPR_FACT,
+  EXPR_BINARY,
+} AstExprType;
+
+struct AstExpr {
+  AstExprType ty;
+  union {
+    // EXPR_FACT
+    AstFactor* factor;
+
+    // EXPR_BINARY
+    struct {
+      enum {
+        BINARY_ADD,
+        BINARY_SUB,
+        BINARY_MUL,
+        BINARY_DIV,
+        BINARY_REM,
+      } op;
+      struct AstExpr* lhs;
+      struct AstExpr* rhs;
+    } binary;
+  };
+};
 
 //
 // AST statement definition

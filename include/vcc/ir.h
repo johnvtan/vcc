@@ -17,9 +17,15 @@ typedef struct {
 } IrVal;
 
 typedef enum {
+  IR_UNKNOWN,
   IR_RET,
   IR_UNARY_COMPLEMENT,
   IR_UNARY_NEG,
+  IR_ADD,
+  IR_SUB,
+  IR_MUL,
+  IR_DIV,
+  IR_REM,
 } IrType;
 
 typedef struct {

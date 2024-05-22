@@ -13,12 +13,16 @@ static x64_Operand* imm(int val) {
   ret->imm = val;
   return ret;
 }
-static x64_Operand* reg(x64_RegType ty) {
-  x64_Operand* ret = calloc(1, sizeof(x64_Operand));
-  ret->ty = X64_OP_REG;
-  ret->reg = ty;
-  return ret;
+static inline x64_Operand* reg(x64_RegType ty) {
+  static x64_Operand regs[] = {
+      [REG_AX] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_AX},
+      [REG_DX] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_DX},
+      [REG_R10] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_R10},
+      [REG_R11] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_R11},
+  };
+  return &regs[ty];
 }
+
 static x64_Operand* pseudo(String* name) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_PSEUDO;
@@ -85,6 +89,28 @@ static void unary(x64_InstructionType ty, IrInstruction* ir, Vec* out) {
   return;
 }
 
+static void binary(x64_InstructionType ty, IrInstruction* ir, Vec* out) {
+  x64_Operand* r1 = to_x64_op(ir->r1);
+  x64_Operand* r2 = to_x64_op(ir->r2);
+  x64_Operand* dst = to_x64_op(ir->dst);
+
+  // mov r1, dst
+  push_instr(out, mov(r1, dst));
+
+  // {op} r2, dst
+  push_instr(out, instr2(ty, r2, dst));
+  return;
+}
+
+static void idiv(IrVal* ir_r1, IrVal* ir_r2, Vec* out) {
+  x64_Operand* r1 = to_x64_op(ir_r1);
+  x64_Operand* r2 = to_x64_op(ir_r2);
+
+  push_instr(out, mov(r1, reg(REG_AX)));
+  push_instr(out, instr0(X64_CDQ));
+  push_instr(out, instr1(X64_IDIV, r2));
+}
+
 // Returns the fixed-up x64_Operand for |operand|.
 // If |operand| is not a pseudoreg, this does nothing and returns |operand|.
 // If |operand| is a pseudoreg, then it finds or inserts its position in |h|.
@@ -109,6 +135,16 @@ static x64_Operand* fixup_pseudoreg(Hashmap* h, x64_Operand* operand,
   return stack_operand;
 }
 
+static inline bool stack_to_stack_not_allowed(x64_Instruction* instr) {
+  bool stack_to_stack = instr->r1 && instr->r1->ty == X64_OP_STACK &&
+                        instr->r2 && instr->r2->ty == X64_OP_STACK;
+
+  if (!stack_to_stack) {
+    return false;
+  }
+  return instr->ty == X64_MOV || instr->ty == X64_ADD || instr->ty == X64_SUB;
+}
+
 //
 // x64 generation passes
 //
@@ -119,21 +155,35 @@ static x64_Function* fixup_instructions(x64_Function* input, int stack_size) {
              (x64_Instruction){.ty = X64_ALLOC_STACK, .stack = stack_size});
 
   vec_for_each(input->instructions, x64_Instruction, instr) {
-    // fixup only needed for stack->stack moves
-    bool needs_fixup = iter.instr->ty == X64_MOV && iter.instr->r1 &&
-                       iter.instr->r1->ty == X64_OP_STACK && iter.instr->r2 &&
-                       iter.instr->r2->ty == X64_OP_STACK;
-    if (!needs_fixup) {
-      push_instr(ret->instructions, *iter.instr);
+    if (stack_to_stack_not_allowed(iter.instr)) {
+      // split up stack->stack ops into
+      // mov r1, %r10d
+      // {op} %r10d, r2
+      x64_Operand* r10 = reg(REG_R10);
+      push_instr(ret->instructions, mov(iter.instr->r1, r10));
+      push_instr(ret->instructions,
+                 instr2(iter.instr->ty, r10, iter.instr->r2));
       continue;
     }
 
-    // split up stack->stack moves into
-    // mov r1, %r10d
-    // mov %r10d, r2
-    x64_Operand* r10 = reg(REG_R10);
-    push_instr(ret->instructions, mov(iter.instr->r1, r10));
-    push_instr(ret->instructions, mov(r10, iter.instr->r2));
+    if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
+      // idiv isn't allowed with immediate args
+      // instead, move the arg into a register then idiv on that
+      push_instr(ret->instructions, mov(iter.instr->r1, reg(REG_R10)));
+      push_instr(ret->instructions, instr1(X64_IDIV, reg(REG_R10)));
+      continue;
+    }
+
+    if (iter.instr->ty == X64_MUL && iter.instr->r2->ty == X64_OP_STACK) {
+      // mul can't use a stack location as its r2
+      push_instr(ret->instructions, mov(iter.instr->r2, reg(REG_R11)));
+      push_instr(ret->instructions,
+                 instr2(X64_MUL, iter.instr->r1, reg(REG_R11)));
+      push_instr(ret->instructions, mov(reg(REG_R11), iter.instr->r2));
+      continue;
+    }
+
+    push_instr(ret->instructions, *iter.instr);
   }
   return ret;
 }
@@ -174,6 +224,32 @@ static x64_Function* convert_function(IrFunction* ir_function) {
       }
       case IR_UNARY_NEG: {
         unary(X64_NEG, ir, ret->instructions);
+        break;
+      }
+      case IR_ADD: {
+        binary(X64_ADD, ir, ret->instructions);
+        break;
+      }
+      case IR_SUB: {
+        binary(X64_SUB, ir, ret->instructions);
+        break;
+      }
+      case IR_MUL: {
+        binary(X64_MUL, ir, ret->instructions);
+        break;
+      }
+      case IR_DIV: {
+        // do Idiv and return ax
+        idiv(ir->r1, ir->r2, ret->instructions);
+        x64_Operand* dst = to_x64_op(ir->dst);
+        push_instr(ret->instructions, mov(reg(REG_AX), dst));
+        break;
+      }
+      case IR_REM: {
+        // do Idiv and return dx
+        idiv(ir->r1, ir->r2, ret->instructions);
+        x64_Operand* dst = to_x64_op(ir->dst);
+        push_instr(ret->instructions, mov(reg(REG_DX), dst));
         break;
       }
       default:

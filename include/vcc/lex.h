@@ -19,6 +19,10 @@ typedef enum {
   TK_TILDE,
   TK_DASH,
   TK_DASHDASH,
+  TK_PLUS,
+  TK_STAR,
+  TK_SLASH,
+  TK_PERCENT,
 
   TK_IDENT,
   TK_NUM_CONST,
