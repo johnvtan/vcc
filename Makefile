@@ -53,6 +53,7 @@ dirs:
 
 clean:
 	rm -rf $(OBJDIR) $(BINDIR)
+	cd testing/ && git clean -fd && cd ..
 
 format:
 	clang-format --style Google -i $(SRCS) $(INCDIR)/vcc/*.h $(TESTSRCS)

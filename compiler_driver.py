@@ -9,7 +9,7 @@ if __name__ == '__main__':
     parser.add_argument("--parse", help="Run up to parser", action="store_true")
     parser.add_argument("--tacky", help="Run up to tacky", action="store_true")
     parser.add_argument("--codegen", help="Run up to codegen", action="store_true")
-    parser.add_argument("--asm_file", help="assembly file", default=None)
+    parser.add_argument("-S", "--asm_file", help="assembly file", action="store_true")
     parser.add_argument("input_file", help="File to compiler")
 
     args = parser.parse_args()
@@ -24,7 +24,7 @@ if __name__ == '__main__':
     pp_file = tempfile.NamedTemporaryFile()
     run(f'gcc -E -P {args.input_file} -o {pp_file.name}', check=True, shell=True)
 
-    asm_file = args.asm_file if args.asm_file else tempfile.NamedTemporaryFile(suffix=".s").name
+    asm_file = basename + ".s" if args.asm_file else tempfile.NamedTemporaryFile(suffix=".s").name
 
     # TODO: there's gotta be a better way
     vcc_cli_arg = ""
