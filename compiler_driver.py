@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 import argparse
-from subprocess import run
+from subprocess import run, CalledProcessError
 import tempfile
 
 if __name__ == '__main__':
@@ -35,7 +35,10 @@ if __name__ == '__main__':
     elif args.codegen: vcc_cli_arg = "--codegen"
     else: emit = True
 
-    run(f'./bin/vcc {vcc_cli_arg} {pp_file.name} {asm_file}', check=True, shell=True)
+    try:
+        run(f'./bin/vcc {vcc_cli_arg} {pp_file.name} {asm_file}', check=True, shell=True)
+    except CalledProcessError as e:
+        exit(e.returncode)
 
     if emit:
         run(f'gcc {asm_file} -o {basename}', check=True, shell=True)
