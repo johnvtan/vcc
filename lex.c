@@ -18,6 +18,10 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},   {TK_TILDE, "~"},
     {TK_DASH, "-"},        {TK_DASHDASH, "--"},   {TK_PLUS, "+"},
     {TK_STAR, "*"},        {TK_SLASH, "/"},       {TK_PERCENT, "%"},
+    {TK_BANG, "!"},        {TK_AMPAMP, "&&"},     {TK_PIPEPIPE, "||"},
+    {TK_EQEQ, "=="},       {TK_BANGEQ, "!="},     {TK_LT, "<"},
+    {TK_GT, ">"},          {TK_LTEQ, "<="},       {TK_GTEQ, ">="},
+
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
@@ -29,14 +33,14 @@ static int longer_keyword_match(const void* a, const void* b) {
   const KeywordMatch* rhs = b;
 
   // If either have match == NULL, then that one is smaller.
-  if (!lhs->match) return -1;
-  if (!rhs->match) return 1;
+  if (!lhs->match) return 1;
+  if (!rhs->match) return -1;
 
   int lhs_len = strlen(lhs->match);
   int rhs_len = strlen(rhs->match);
 
-  if (lhs_len > rhs_len) return 1;
-  if (lhs_len < rhs_len) return -1;
+  if (lhs_len > rhs_len) return -1;
+  if (lhs_len < rhs_len) return 1;
   return 0;
 }
 
