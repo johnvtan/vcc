@@ -127,8 +127,16 @@ static AstExpr* parse_factor(ParseContext* cx) {
     return expr_factor(f);
   }
 
+  if (match(cx, TK_BANG)) {
+    consume(cx);
+    AstFactor* f = factor(FACT_UNARY);
+    f->unary.op = UNARY_NOT;
+    f->unary.expr = parse_factor(cx);
+    return expr_factor(f);
+  }
+
   if (match(cx, TK_OPEN_PAREN)) {
-    expect(cx, TK_OPEN_PAREN);
+    consume(cx);
     AstExpr* e = parse_expr(cx, 0);
     expect(cx, TK_CLOSE_PAREN);
     return e;
@@ -159,6 +167,22 @@ static inline BinaryInfo binary_info(TokenType ty) {
       return (BinaryInfo){50, BINARY_DIV};
     case TK_PERCENT:
       return (BinaryInfo){50, BINARY_REM};
+    case TK_LT:
+      return (BinaryInfo){35, BINARY_LT};
+    case TK_LTEQ:
+      return (BinaryInfo){35, BINARY_LTEQ};
+    case TK_GT:
+      return (BinaryInfo){35, BINARY_GT};
+    case TK_GTEQ:
+      return (BinaryInfo){35, BINARY_GTEQ};
+    case TK_EQEQ:
+      return (BinaryInfo){30, BINARY_EQ};
+    case TK_BANGEQ:
+      return (BinaryInfo){30, BINARY_NEQ};
+    case TK_AMPAMP:
+      return (BinaryInfo){10, BINARY_AND};
+    case TK_PIPEPIPE:
+      return (BinaryInfo){5, BINARY_OR};
     default:
       return (BinaryInfo){-1, -1};
   }

@@ -27,6 +27,7 @@ struct AstFactor {
       enum {
         UNARY_NEG,
         UNARY_COMPLEMENT,
+        UNARY_NOT,
       } op;
       struct AstExpr* expr;
     } unary;
@@ -52,6 +53,14 @@ struct AstExpr {
         BINARY_MUL,
         BINARY_DIV,
         BINARY_REM,
+        BINARY_AND,
+        BINARY_OR,
+        BINARY_EQ,
+        BINARY_NEQ,
+        BINARY_LT,
+        BINARY_LTEQ,
+        BINARY_GT,
+        BINARY_GTEQ,
       } op;
       struct AstExpr* lhs;
       struct AstExpr* rhs;
