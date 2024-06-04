@@ -21,11 +21,25 @@ typedef enum {
   IR_RET,
   IR_UNARY_COMPLEMENT,
   IR_UNARY_NEG,
+  IR_UNARY_NOT,
+
   IR_ADD,
   IR_SUB,
   IR_MUL,
   IR_DIV,
   IR_REM,
+  IR_EQ,
+  IR_NEQ,
+  IR_LT,
+  IR_LTEQ,
+  IR_GT,
+  IR_GTEQ,
+
+  IR_COPY,
+  IR_JMP,
+  IR_JZ,
+  IR_JNZ,
+  IR_LABEL,
 } IrType;
 
 typedef struct {
@@ -34,6 +48,8 @@ typedef struct {
   IrVal* dst;
   IrVal* r1;
   IrVal* r2;
+
+  String* label;
 
 } IrInstruction;
 

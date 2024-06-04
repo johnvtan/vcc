@@ -61,6 +61,31 @@ static inline IrInstruction binary(IrType ty, IrVal* r1, IrVal* r2,
   };
 }
 
+// Generates a unique label by appending an incrementing count to the label
+// name.
+static inline IrInstruction label(const char* label) {
+  static int n = 0;
+  return (IrInstruction){
+      .ty = IR_LABEL,
+      .label = string_format("%s_%d", label, n++),
+  };
+}
+
+static inline IrInstruction jmp(String* label) {
+  return (IrInstruction){
+      .ty = IR_JMP,
+      .label = label,
+  };
+}
+
+static inline IrInstruction jmp_cnd(IrType ty, IrVal* cnd, String* label) {
+  return (IrInstruction){
+      .ty = ty,
+      .r1 = cnd,
+      .label = label,
+  };
+}
+
 //
 // Helpers for pushing instructions
 //
@@ -86,8 +111,11 @@ static IrVal* gen_fact(AstFactor* f, Vec* out) {
         case UNARY_NEG:
           unary_op = IR_UNARY_NEG;
           break;
+        case UNARY_NOT:
+          unary_op = IR_UNARY_NOT;
+          break;
         default:
-          panic("Unexpected AstStmt type: %lu", f->unary.op);
+          panic("Unexpected AstFact type: %lu", f->unary.op);
       }
       IrVal* dst = temp();
       push_inst(out, unary(unary_op, operand, dst));
@@ -95,36 +123,132 @@ static IrVal* gen_fact(AstFactor* f, Vec* out) {
     }
   }
 }
+
+static IrVal* gen_binary(AstExpr* expr, Vec* out) {
+  IrVal* lhs = gen_expr(expr->binary.lhs, out);
+  IrVal* rhs = gen_expr(expr->binary.rhs, out);
+  IrVal* dst = temp();
+  IrType op = IR_UNKNOWN;
+  switch (expr->binary.op) {
+    case BINARY_ADD:
+      op = IR_ADD;
+      break;
+    case BINARY_SUB:
+      op = IR_SUB;
+      break;
+    case BINARY_DIV:
+      op = IR_DIV;
+      break;
+    case BINARY_MUL:
+      op = IR_MUL;
+      break;
+    case BINARY_REM:
+      op = IR_REM;
+      break;
+    case BINARY_EQ:
+      op = IR_EQ;
+      break;
+    case BINARY_NEQ:
+      op = IR_NEQ;
+      break;
+    case BINARY_LT:
+      op = IR_LT;
+      break;
+    case BINARY_LTEQ:
+      op = IR_LTEQ;
+      break;
+    case BINARY_GT:
+      op = IR_GT;
+      break;
+    case BINARY_GTEQ:
+      op = IR_GTEQ;
+      break;
+
+    default:
+      panic("Unexpected binary op: %u", expr->binary.op);
+  }
+  push_inst(out, binary(op, lhs, rhs, dst));
+  return dst;
+}
+
 static IrVal* gen_expr(AstExpr* expr, Vec* out) {
   switch (expr->ty) {
     case EXPR_FACT:
       return gen_fact(expr->factor, out);
     case EXPR_BINARY: {
-      IrVal* lhs = gen_expr(expr->binary.lhs, out);
-      IrVal* rhs = gen_expr(expr->binary.rhs, out);
-      IrVal* dst = temp();
-      IrType op = IR_UNKNOWN;
-      switch (expr->binary.op) {
-        case BINARY_ADD:
-          op = IR_ADD;
-          break;
-        case BINARY_SUB:
-          op = IR_SUB;
-          break;
-        case BINARY_DIV:
-          op = IR_DIV;
-          break;
-        case BINARY_MUL:
-          op = IR_MUL;
-          break;
-        case BINARY_REM:
-          op = IR_REM;
-          break;
-        default:
-          panic("Unexpected binary op: %u", expr->binary.op);
+      // AND and OR are special because they have to short circuit.
+      if (expr->binary.op == BINARY_AND) {
+        IrInstruction false_label = label(".AND_FALSE");
+        IrInstruction end_label = label(".AND_END");
+
+        IrVal* result = temp();
+
+        // <instructions for e1
+        IrVal* e1 = gen_expr(expr->binary.lhs, out);
+
+        // jz e1, AND_FALSE
+        push_inst(out, jmp_cnd(IR_JZ, e1, false_label.label));
+
+        // <instructions for e2>
+        IrVal* e2 = gen_expr(expr->binary.rhs, out);
+
+        // jz e2, AND_FALSE
+        push_inst(out, jmp_cnd(IR_JZ, e2, false_label.label));
+
+        // result = 1
+        push_inst(out, unary(IR_COPY, constant(1), result));
+
+        // jmp AND_END
+        push_inst(out, jmp(end_label.label));
+
+        // AND_FALSE:
+        push_inst(out, false_label);
+
+        // result = 0
+        push_inst(out, unary(IR_COPY, constant(0), result));
+
+        // AND_END
+        push_inst(out, end_label);
+
+        return result;
+      } else if (expr->binary.op == BINARY_OR) {
+        IrInstruction true_label = label(".OR_TRUE");
+        IrInstruction end_label = label(".OR_END");
+
+        IrVal* result = temp();
+
+        // <instructions for e1
+        IrVal* e1 = gen_expr(expr->binary.lhs, out);
+
+        // jnz e1, OR_TRUE
+        push_inst(out, jmp_cnd(IR_JNZ, e1, true_label.label));
+
+        // <instructions for e2>
+        IrVal* e2 = gen_expr(expr->binary.rhs, out);
+
+        // jnz e2, OR_TRUE
+        push_inst(out, jmp_cnd(IR_JNZ, e2, true_label.label));
+
+        // result = 0
+        push_inst(out, unary(IR_COPY, constant(0), result));
+
+        // jmp OR_END
+        push_inst(out, jmp(end_label.label));
+
+        // OR_TRUE:
+        push_inst(out, true_label);
+
+        // result = 1
+        push_inst(out, unary(IR_COPY, constant(1), result));
+
+        // OR_END
+        push_inst(out, end_label);
+
+        return result;
+
+      } else {
+        return gen_binary(expr, out);
       }
-      push_inst(out, binary(op, lhs, rhs, dst));
-      return dst;
     }
     default:
       panic("Unexpected AstStmt type: %lu", expr->ty);
