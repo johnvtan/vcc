@@ -4,6 +4,11 @@
 #include <vcc/gen_x64.h>
 #include <vcc/hashmap.h>
 
+static x64_Operand ZERO = {
+    .ty = X64_OP_IMM,
+    .imm = 0,
+};
+
 //
 // x64_Operand helpers
 //
@@ -67,6 +72,24 @@ static inline x64_Instruction instr0(x64_InstructionType ty) {
   return instr2(ty, NULL, NULL);
 }
 
+static inline x64_Instruction label(String* label) {
+  return (x64_Instruction){.ty = X64_LABEL, .label = label};
+}
+
+static inline x64_Instruction setcc(x64_ConditionCode cc, x64_Operand* r1) {
+  x64_Instruction ret = instr1(X64_SETCC, r1);
+  ret.cc = cc;
+  return ret;
+}
+
+static inline x64_Instruction jmp(String* label) {
+  return (x64_Instruction){.ty = X64_JMP, .jmp = {.label = label}};
+}
+
+static inline x64_Instruction jmpcc(x64_ConditionCode cc, String* label) {
+  return (x64_Instruction){.ty = X64_JMPCC, .jmp = {.cc = cc, .label = label}};
+}
+
 static inline x64_Instruction mov(x64_Operand* r1, x64_Operand* r2) {
   return instr2(X64_MOV, r1, r2);
 }
@@ -100,6 +123,20 @@ static void binary(x64_InstructionType ty, IrInstruction* ir, Vec* out) {
   // {op} r2, dst
   push_instr(out, instr2(ty, r2, dst));
   return;
+}
+
+static void comparison(x64_ConditionCode cc, IrVal* ir_r1, IrVal* ir_r2,
+                       IrVal* ir_dst, Vec* out) {
+  x64_Operand* r1 = to_x64_op(ir_r1);
+  x64_Operand* r2 = to_x64_op(ir_r2);
+  x64_Operand* dst = to_x64_op(ir_dst);
+
+  // cmp r2, r1
+  push_instr(out, instr2(X64_CMP, r2, r1));
+  // mov 0, dst
+  push_instr(out, mov(imm(0), dst));
+  // setcc(cc, dst)
+  push_instr(out, setcc(cc, dst));
 }
 
 static void idiv(IrVal* ir_r1, IrVal* ir_r2, Vec* out) {
@@ -142,7 +179,8 @@ static inline bool stack_to_stack_not_allowed(x64_Instruction* instr) {
   if (!stack_to_stack) {
     return false;
   }
-  return instr->ty == X64_MOV || instr->ty == X64_ADD || instr->ty == X64_SUB;
+  return instr->ty == X64_MOV || instr->ty == X64_ADD || instr->ty == X64_SUB ||
+         instr->ty == X64_CMP;
 }
 
 //
@@ -159,31 +197,30 @@ static x64_Function* fixup_instructions(x64_Function* input, int stack_size) {
       // split up stack->stack ops into
       // mov r1, %r10d
       // {op} %r10d, r2
-      x64_Operand* r10 = reg(REG_R10);
-      push_instr(ret->instructions, mov(iter.instr->r1, r10));
+      push_instr(ret->instructions, mov(iter.instr->r1, reg(REG_R10)));
       push_instr(ret->instructions,
-                 instr2(iter.instr->ty, r10, iter.instr->r2));
+                 instr2(iter.instr->ty, reg(REG_R10), iter.instr->r2));
       continue;
-    }
-
-    if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
+    } else if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
       // idiv isn't allowed with immediate args
       // instead, move the arg into a register then idiv on that
       push_instr(ret->instructions, mov(iter.instr->r1, reg(REG_R10)));
       push_instr(ret->instructions, instr1(X64_IDIV, reg(REG_R10)));
-      continue;
-    }
-
-    if (iter.instr->ty == X64_MUL && iter.instr->r2->ty == X64_OP_STACK) {
+    } else if (iter.instr->ty == X64_MUL &&
+               iter.instr->r2->ty == X64_OP_STACK) {
       // mul can't use a stack location as its r2
       push_instr(ret->instructions, mov(iter.instr->r2, reg(REG_R11)));
       push_instr(ret->instructions,
                  instr2(X64_MUL, iter.instr->r1, reg(REG_R11)));
       push_instr(ret->instructions, mov(reg(REG_R11), iter.instr->r2));
-      continue;
+    } else if (iter.instr->ty == X64_CMP && iter.instr->r2->ty == X64_OP_IMM) {
+      // cmp can't have an imm as its r2
+      push_instr(ret->instructions, mov(iter.instr->r2, reg(REG_R11)));
+      push_instr(ret->instructions,
+                 instr2(X64_CMP, iter.instr->r1, reg(REG_R11)));
+    } else {
+      push_instr(ret->instructions, *iter.instr);
     }
-
-    push_instr(ret->instructions, *iter.instr);
   }
   return ret;
 }
@@ -199,6 +236,13 @@ static ReplacePseudoregsReturn replace_pseudoregs(x64_Function* input) {
   Hashmap* stack_map = hashmap_new();
   int stack_pos = 0;
   vec_for_each(input->instructions, x64_Instruction, instr) {
+    // Ignore any instructions that don't use r1/r2
+    // TODO: just make x64_Instruction not a union? Can't rely on checks against
+    // null with unions.
+    if (iter.instr->ty == X64_LABEL || iter.instr->ty == X64_JMP ||
+        iter.instr->ty == X64_JMPCC || iter.instr->ty == X64_ALLOC_STACK) {
+      continue;
+    }
     x64_Operand* r1 = fixup_pseudoreg(stack_map, iter.instr->r1, &stack_pos);
     x64_Operand* r2 = fixup_pseudoreg(stack_map, iter.instr->r2, &stack_pos);
     push_instr(ret->instructions, instr2(iter.instr->ty, r1, r2));
@@ -226,6 +270,14 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         unary(X64_NEG, ir, ret->instructions);
         break;
       }
+      case IR_UNARY_NOT: {
+        IrVal zero = {
+            .ty = IR_VAL_CONST,
+            .constant = 0,
+        };
+        comparison(CC_E, &zero, ir->r1, ir->dst, ret->instructions);
+        break;
+      }
       case IR_ADD: {
         binary(X64_ADD, ir, ret->instructions);
         break;
@@ -236,6 +288,30 @@ static x64_Function* convert_function(IrFunction* ir_function) {
       }
       case IR_MUL: {
         binary(X64_MUL, ir, ret->instructions);
+        break;
+      }
+      case IR_GT: {
+        comparison(CC_G, ir->r1, ir->r2, ir->dst, ret->instructions);
+        break;
+      }
+      case IR_GTEQ: {
+        comparison(CC_GE, ir->r1, ir->r2, ir->dst, ret->instructions);
+        break;
+      }
+      case IR_LT: {
+        comparison(CC_L, ir->r1, ir->r2, ir->dst, ret->instructions);
+        break;
+      }
+      case IR_LTEQ: {
+        comparison(CC_LE, ir->r1, ir->r2, ir->dst, ret->instructions);
+        break;
+      }
+      case IR_EQ: {
+        comparison(CC_E, ir->r1, ir->r2, ir->dst, ret->instructions);
+        break;
+      }
+      case IR_NEQ: {
+        comparison(CC_NE, ir->r1, ir->r2, ir->dst, ret->instructions);
         break;
       }
       case IR_DIV: {
@@ -252,6 +328,32 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         push_instr(ret->instructions, mov(reg(REG_DX), dst));
         break;
       }
+      case IR_JMP: {
+        push_instr(ret->instructions, jmp(ir->label));
+        break;
+      }
+      case IR_JZ: {
+        push_instr(ret->instructions,
+                   instr2(X64_CMP, &ZERO, to_x64_op(ir->r1)));
+        push_instr(ret->instructions, jmpcc(CC_E, ir->label));
+        break;
+      }
+      case IR_JNZ: {
+        push_instr(ret->instructions,
+                   instr2(X64_CMP, &ZERO, to_x64_op(ir->r1)));
+        push_instr(ret->instructions, jmpcc(CC_NE, ir->label));
+        break;
+      }
+      case IR_LABEL: {
+        push_instr(ret->instructions, label(ir->label));
+        break;
+      }
+      case IR_COPY: {
+        push_instr(ret->instructions,
+                   mov(to_x64_op(ir->r1), to_x64_op(ir->dst)));
+        break;
+      }
+
       default:
         panic("Unexpected IR instruction type: %lu", iter.ir_instr->ty);
     }

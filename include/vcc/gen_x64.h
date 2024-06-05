@@ -46,8 +46,22 @@ typedef enum {
   X64_MUL,
   X64_IDIV,
   X64_CDQ,  // sign extend
+  X64_CMP,
+  X64_JMP,
+  X64_JMPCC,
+  X64_SETCC,
+  X64_LABEL,
   X64_ALLOC_STACK,
 } x64_InstructionType;
+
+typedef enum {
+  CC_E,
+  CC_NE,
+  CC_G,
+  CC_GE,
+  CC_L,
+  CC_LE,
+} x64_ConditionCode;
 
 typedef struct {
   x64_InstructionType ty;
@@ -55,12 +69,23 @@ typedef struct {
   union {
     // Most instruction types
     struct {
+      // condition codes
+      // Used for SETCC, ignored otherwise
+      x64_ConditionCode cc;
       x64_Operand* r1;
       x64_Operand* r2;
     };
 
+    struct {
+      x64_ConditionCode cc;
+      String* label;
+    } jmp;
+
     // X64_ALLOC_STACK
     int stack;
+
+    // X64_LABEL
+    String* label;
   };
 } x64_Instruction;
 
