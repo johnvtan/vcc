@@ -10,6 +10,7 @@ typedef enum {
   X64_OP_REG,
   X64_OP_PSEUDO,
   X64_OP_STACK,
+  X64_OP_LABEL,
 } x64_OperandType;
 
 typedef enum {
@@ -33,7 +34,11 @@ typedef struct {
 
     // X64_OP_STACK
     int stack;
+
+    // X64_OP_LABEL
+    String* label;
   };
+  int size;
 } x64_Operand;
 
 typedef enum {
@@ -72,20 +77,14 @@ typedef struct {
       // condition codes
       // Used for SETCC, ignored otherwise
       x64_ConditionCode cc;
+
+      // For JMP and LABEL instructions, r1 contains the label
       x64_Operand* r1;
       x64_Operand* r2;
     };
 
-    struct {
-      x64_ConditionCode cc;
-      String* label;
-    } jmp;
-
     // X64_ALLOC_STACK
     int stack;
-
-    // X64_LABEL
-    String* label;
   };
 } x64_Instruction;
 

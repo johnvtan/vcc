@@ -16,28 +16,39 @@ static x64_Operand* imm(int val) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
+  ret->size = 4;
   return ret;
 }
-static inline x64_Operand* reg(x64_RegType ty) {
-  static x64_Operand regs[] = {
-      [REG_AX] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_AX},
-      [REG_DX] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_DX},
-      [REG_R10] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_R10},
-      [REG_R11] = (x64_Operand){.ty = X64_OP_REG, .reg = REG_R11},
-  };
-  return &regs[ty];
+
+static inline x64_Operand* reg(x64_RegType ty, int size) {
+  x64_Operand* ret = calloc(1, sizeof(x64_Operand));
+  ret->ty = X64_OP_REG;
+  ret->reg = ty;
+  ret->size = size;
+  return ret;
 }
 
 static x64_Operand* pseudo(String* name) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_PSEUDO;
   ret->pseudo = name;
+  ret->size = 4;
   return ret;
 }
+
 static x64_Operand* stack(int val) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_STACK;
   ret->stack = val;
+  ret->size = 4;
+  return ret;
+}
+
+static x64_Operand* label_op(String* label) {
+  x64_Operand* ret = calloc(1, sizeof(x64_Operand));
+  ret->ty = X64_OP_LABEL;
+  ret->label = label;
+  ret->size = 0;
   return ret;
 }
 
@@ -73,7 +84,7 @@ static inline x64_Instruction instr0(x64_InstructionType ty) {
 }
 
 static inline x64_Instruction label(String* label) {
-  return (x64_Instruction){.ty = X64_LABEL, .label = label};
+  return (x64_Instruction){.ty = X64_LABEL, .r1 = label_op(label)};
 }
 
 static inline x64_Instruction setcc(x64_ConditionCode cc, x64_Operand* r1) {
@@ -83,11 +94,11 @@ static inline x64_Instruction setcc(x64_ConditionCode cc, x64_Operand* r1) {
 }
 
 static inline x64_Instruction jmp(String* label) {
-  return (x64_Instruction){.ty = X64_JMP, .jmp = {.label = label}};
+  return (x64_Instruction){.ty = X64_JMP, .r1 = label_op(label)};
 }
 
 static inline x64_Instruction jmpcc(x64_ConditionCode cc, String* label) {
-  return (x64_Instruction){.ty = X64_JMPCC, .jmp = {.cc = cc, .label = label}};
+  return (x64_Instruction){.ty = X64_JMPCC, .cc = cc, .r1 = label_op(label)};
 }
 
 static inline x64_Instruction mov(x64_Operand* r1, x64_Operand* r2) {
@@ -143,7 +154,7 @@ static void idiv(IrVal* ir_r1, IrVal* ir_r2, Vec* out) {
   x64_Operand* r1 = to_x64_op(ir_r1);
   x64_Operand* r2 = to_x64_op(ir_r2);
 
-  push_instr(out, mov(r1, reg(REG_AX)));
+  push_instr(out, mov(r1, reg(REG_AX, 4)));
   push_instr(out, instr0(X64_CDQ));
   push_instr(out, instr1(X64_IDIV, r2));
 }
@@ -197,27 +208,29 @@ static x64_Function* fixup_instructions(x64_Function* input, int stack_size) {
       // split up stack->stack ops into
       // mov r1, %r10d
       // {op} %r10d, r2
-      push_instr(ret->instructions, mov(iter.instr->r1, reg(REG_R10)));
+      x64_Operand* r10 = reg(REG_R10, 4);
+      push_instr(ret->instructions, mov(iter.instr->r1, r10));
       push_instr(ret->instructions,
-                 instr2(iter.instr->ty, reg(REG_R10), iter.instr->r2));
+                 instr2(iter.instr->ty, r10, iter.instr->r2));
       continue;
     } else if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
       // idiv isn't allowed with immediate args
       // instead, move the arg into a register then idiv on that
-      push_instr(ret->instructions, mov(iter.instr->r1, reg(REG_R10)));
-      push_instr(ret->instructions, instr1(X64_IDIV, reg(REG_R10)));
+      x64_Operand* r10 = reg(REG_R10, 4);
+      push_instr(ret->instructions, mov(iter.instr->r1, r10));
+      push_instr(ret->instructions, instr1(X64_IDIV, r10));
     } else if (iter.instr->ty == X64_MUL &&
                iter.instr->r2->ty == X64_OP_STACK) {
       // mul can't use a stack location as its r2
-      push_instr(ret->instructions, mov(iter.instr->r2, reg(REG_R11)));
-      push_instr(ret->instructions,
-                 instr2(X64_MUL, iter.instr->r1, reg(REG_R11)));
-      push_instr(ret->instructions, mov(reg(REG_R11), iter.instr->r2));
+      x64_Operand* r11 = reg(REG_R11, 4);
+      push_instr(ret->instructions, mov(iter.instr->r2, r11));
+      push_instr(ret->instructions, instr2(X64_MUL, iter.instr->r1, r11));
+      push_instr(ret->instructions, mov(r11, iter.instr->r2));
     } else if (iter.instr->ty == X64_CMP && iter.instr->r2->ty == X64_OP_IMM) {
       // cmp can't have an imm as its r2
-      push_instr(ret->instructions, mov(iter.instr->r2, reg(REG_R11)));
-      push_instr(ret->instructions,
-                 instr2(X64_CMP, iter.instr->r1, reg(REG_R11)));
+      x64_Operand* r11 = reg(REG_R11, 4);
+      push_instr(ret->instructions, mov(iter.instr->r2, r11));
+      push_instr(ret->instructions, instr2(X64_CMP, iter.instr->r1, r11));
     } else {
       push_instr(ret->instructions, *iter.instr);
     }
@@ -241,11 +254,15 @@ static ReplacePseudoregsReturn replace_pseudoregs(x64_Function* input) {
     // null with unions.
     if (iter.instr->ty == X64_LABEL || iter.instr->ty == X64_JMP ||
         iter.instr->ty == X64_JMPCC || iter.instr->ty == X64_ALLOC_STACK) {
+      push_instr(ret->instructions, *iter.instr);
       continue;
     }
     x64_Operand* r1 = fixup_pseudoreg(stack_map, iter.instr->r1, &stack_pos);
     x64_Operand* r2 = fixup_pseudoreg(stack_map, iter.instr->r2, &stack_pos);
-    push_instr(ret->instructions, instr2(iter.instr->ty, r1, r2));
+
+    x64_Instruction cp = instr2(iter.instr->ty, r1, r2);
+    cp.cc = iter.instr->cc;
+    push_instr(ret->instructions, cp);
   }
 
   return (ReplacePseudoregsReturn){.function = ret, .stack = stack_pos};
@@ -258,7 +275,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
     switch (ir->ty) {
       case IR_RET: {
         // mov $val, %rax
-        push_instr(ret->instructions, mov(to_x64_op(ir->r1), reg(REG_AX)));
+        push_instr(ret->instructions, mov(to_x64_op(ir->r1), reg(REG_AX, 4)));
         push_instr(ret->instructions, instr0(X64_RET));
         break;
       }
@@ -318,14 +335,14 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         // do Idiv and return ax
         idiv(ir->r1, ir->r2, ret->instructions);
         x64_Operand* dst = to_x64_op(ir->dst);
-        push_instr(ret->instructions, mov(reg(REG_AX), dst));
+        push_instr(ret->instructions, mov(reg(REG_AX, 4), dst));
         break;
       }
       case IR_REM: {
         // do Idiv and return dx
         idiv(ir->r1, ir->r2, ret->instructions);
         x64_Operand* dst = to_x64_op(ir->dst);
-        push_instr(ret->instructions, mov(reg(REG_DX), dst));
+        push_instr(ret->instructions, mov(reg(REG_DX, 4), dst));
         break;
       }
       case IR_JMP: {
