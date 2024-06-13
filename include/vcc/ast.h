@@ -8,18 +8,18 @@
 // AST expression definition
 //
 
-typedef struct AstFactor AstFactor;
 typedef struct AstExpr AstExpr;
 
 typedef enum {
-  FACT_INT,
-  FACT_UNARY,
-} AstFactorType;
+  EXPR_BINARY,
+  EXPR_UNARY,
+  EXPR_INT_CONST,
+} AstExprType;
 
-struct AstFactor {
-  AstFactorType ty;
+struct AstExpr {
+  AstExprType ty;
   union {
-    // FACT_INT
+    // EXPR_FACT
     int int_const;
 
     // FACT_UNARY
@@ -31,19 +31,6 @@ struct AstFactor {
       } op;
       struct AstExpr* expr;
     } unary;
-  };
-};
-
-typedef enum {
-  EXPR_FACT,
-  EXPR_BINARY,
-} AstExprType;
-
-struct AstExpr {
-  AstExprType ty;
-  union {
-    // EXPR_FACT
-    AstFactor* factor;
 
     // EXPR_BINARY
     struct {

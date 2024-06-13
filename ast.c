@@ -80,12 +80,6 @@ static AstExpr* expr(AstExprType ty) {
   return e;
 }
 
-static AstExpr* expr_factor(AstFactor* f) {
-  AstExpr* e = expr(EXPR_FACT);
-  e->factor = f;
-  return e;
-}
-
 static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
   AstExpr* e = expr(EXPR_BINARY);
   e->binary.op = op;
@@ -94,45 +88,39 @@ static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
   return e;
 }
 
-static AstFactor* factor(AstFactorType ty) {
-  AstFactor* f = calloc(1, sizeof(AstFactor));
-  f->ty = ty;
-  return f;
-}
-
 //
 // Recursive descent parsing functions
 //
 static AstExpr* parse_factor(ParseContext* cx) {
   if (match(cx, TK_NUM_CONST)) {
     Token t = consume(cx);
-    AstFactor* f = factor(FACT_INT);
-    f->int_const = strtol(cstring(t.content), NULL, 10);
-    return expr_factor(f);
+    AstExpr* int_const = expr(EXPR_INT_CONST);
+    int_const->int_const = strtol(cstring(t.content), NULL, 10);
+    return int_const;
   }
 
   if (match(cx, TK_TILDE)) {
     consume(cx);
-    AstFactor* f = factor(FACT_UNARY);
-    f->unary.op = UNARY_COMPLEMENT;
-    f->unary.expr = parse_factor(cx);
-    return expr_factor(f);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_COMPLEMENT;
+    e->unary.expr = parse_factor(cx);
+    return e;
   }
 
   if (match(cx, TK_DASH)) {
     consume(cx);
-    AstFactor* f = factor(FACT_UNARY);
-    f->unary.op = UNARY_NEG;
-    f->unary.expr = parse_factor(cx);
-    return expr_factor(f);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_NEG;
+    e->unary.expr = parse_factor(cx);
+    return e;
   }
 
   if (match(cx, TK_BANG)) {
     consume(cx);
-    AstFactor* f = factor(FACT_UNARY);
-    f->unary.op = UNARY_NOT;
-    f->unary.expr = parse_factor(cx);
-    return expr_factor(f);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_NOT;
+    e->unary.expr = parse_factor(cx);
+    return e;
   }
 
   if (match(cx, TK_OPEN_PAREN)) {

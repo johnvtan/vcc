@@ -97,32 +97,6 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 // Functions that walk the AST and generate IR instructions
 //
 static IrVal* gen_expr(AstExpr* expr, Vec* out);
-static IrVal* gen_fact(AstFactor* f, Vec* out) {
-  switch (f->ty) {
-    case FACT_INT:
-      return constant(f->int_const);
-    case FACT_UNARY: {
-      IrVal* operand = gen_expr(f->unary.expr, out);
-      IrType unary_op = IR_UNKNOWN;
-      switch (f->unary.op) {
-        case UNARY_COMPLEMENT:
-          unary_op = IR_UNARY_COMPLEMENT;
-          break;
-        case UNARY_NEG:
-          unary_op = IR_UNARY_NEG;
-          break;
-        case UNARY_NOT:
-          unary_op = IR_UNARY_NOT;
-          break;
-        default:
-          panic("Unexpected AstFact type: %lu", f->unary.op);
-      }
-      IrVal* dst = temp();
-      push_inst(out, unary(unary_op, operand, dst));
-      return dst;
-    }
-  }
-}
 
 static IrVal* gen_binary(AstExpr* expr, Vec* out) {
   IrVal* lhs = gen_expr(expr->binary.lhs, out);
@@ -173,8 +147,6 @@ static IrVal* gen_binary(AstExpr* expr, Vec* out) {
 
 static IrVal* gen_expr(AstExpr* expr, Vec* out) {
   switch (expr->ty) {
-    case EXPR_FACT:
-      return gen_fact(expr->factor, out);
     case EXPR_BINARY: {
       // AND and OR are special because they have to short circuit.
       if (expr->binary.op == BINARY_AND) {
@@ -249,6 +221,28 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
       } else {
         return gen_binary(expr, out);
       }
+    }
+    case EXPR_INT_CONST:
+      return constant(expr->int_const);
+    case EXPR_UNARY: {
+      IrVal* operand = gen_expr(expr->unary.expr, out);
+      IrType unary_op = IR_UNKNOWN;
+      switch (expr->unary.op) {
+        case UNARY_COMPLEMENT:
+          unary_op = IR_UNARY_COMPLEMENT;
+          break;
+        case UNARY_NEG:
+          unary_op = IR_UNARY_NEG;
+          break;
+        case UNARY_NOT:
+          unary_op = IR_UNARY_NOT;
+          break;
+        default:
+          panic("Unexpected AstFact type: %lu", expr->unary.op);
+      }
+      IrVal* dst = temp();
+      push_inst(out, unary(unary_op, operand, dst));
+      return dst;
     }
     default:
       panic("Unexpected AstStmt type: %lu", expr->ty);

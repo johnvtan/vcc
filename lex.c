@@ -21,7 +21,7 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_BANG, "!"},        {TK_AMPAMP, "&&"},     {TK_PIPEPIPE, "||"},
     {TK_EQEQ, "=="},       {TK_BANGEQ, "!="},     {TK_LT, "<"},
     {TK_GT, ">"},          {TK_LTEQ, "<="},       {TK_GTEQ, ">="},
-
+    {TK_EQ, "="},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))

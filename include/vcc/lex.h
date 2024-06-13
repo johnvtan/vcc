@@ -27,6 +27,7 @@ typedef enum {
   TK_AMPAMP,
   TK_PIPEPIPE,
   TK_EQEQ,
+  TK_EQ,
   TK_BANGEQ,
   TK_LT,
   TK_GT,
