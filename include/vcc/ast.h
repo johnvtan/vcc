@@ -9,11 +9,11 @@
 //
 
 typedef struct AstExpr AstExpr;
-
 typedef enum {
   EXPR_BINARY,
   EXPR_UNARY,
   EXPR_INT_CONST,
+  EXPR_VAR,
 } AstExprType;
 
 struct AstExpr {
@@ -22,7 +22,7 @@ struct AstExpr {
     // EXPR_FACT
     int int_const;
 
-    // FACT_UNARY
+    // EXPR_UNARY
     struct {
       enum {
         UNARY_NEG,
@@ -48,10 +48,14 @@ struct AstExpr {
         BINARY_LTEQ,
         BINARY_GT,
         BINARY_GTEQ,
+        BINARY_ASSIGN,
       } op;
       struct AstExpr* lhs;
       struct AstExpr* rhs;
     } binary;
+
+    // EXPR_VAR
+    String* ident;
   };
 };
 
@@ -60,17 +64,33 @@ struct AstExpr {
 //
 typedef enum {
   STMT_RETURN,
+  STMT_EXPR,
+  STMT_NULL,
 } AstStmtType;
 
 typedef struct {
   AstStmtType ty;
   union {
-    // STMT_RETURN
-    struct {
-      AstExpr* expr;
-    } ret;
+    AstExpr* expr;
   };
 } AstStmt;
+
+typedef struct {
+  String* name;
+  AstExpr* init;
+} AstDecl;
+
+typedef struct {
+  enum {
+    BLOCK_STMT,
+    BLOCK_DECL,
+  } ty;
+
+  union {
+    AstDecl* decl;
+    AstStmt* stmt;
+  };
+} AstBlockItem;
 
 //
 // AST node definition
@@ -79,6 +99,7 @@ typedef enum {
   NODE_FN,
   NODE_STMT,
   NODE_EXPR,
+  NODE_DECL,
 } AstNodeType;
 
 typedef struct AstNode {
@@ -87,9 +108,8 @@ typedef struct AstNode {
     // NODE_FN
     struct {
       String* name;
-
-      // This should always be a NODE_STMT
-      struct AstNode* body;
+      // Vec<AstBlockItem>
+      Vec* body;
     } fn;
 
     // NODE_STMT
@@ -97,6 +117,9 @@ typedef struct AstNode {
 
     // NODE_EXPR
     AstExpr* expr;
+
+    // NODE_DECL
+    AstDecl* decl;
   };
 } AstNode;
 

@@ -252,7 +252,7 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
 static void gen_statement(AstStmt* stmt, Vec* out) {
   switch (stmt->ty) {
     case STMT_RETURN: {
-      IrVal* expr = gen_expr(stmt->ret.expr, out);
+      IrVal* expr = gen_expr(stmt->expr, out);
       push_inst(out, unary_no_dst(IR_RET, expr));
       break;
     }
@@ -265,7 +265,7 @@ static IrFunction* gen_function(AstNode* ast_function) {
   IrFunction* ir_function = calloc(1, sizeof(IrFunction));
   ir_function->instructions = vec_new(sizeof(IrInstruction));
   ir_function->name = ast_function->fn.name;
-  gen_statement(ast_function->fn.body->stmt, ir_function->instructions);
+  // gen_statement(ast_function->fn.body->stmt, ir_function->instructions);
   return ir_function;
 }
 

@@ -68,12 +68,6 @@ static AstNode* node(AstNodeType ty) {
   return n;
 }
 
-static AstStmt* stmt(AstStmtType ty) {
-  AstStmt* s = calloc(1, sizeof(AstStmt));
-  s->ty = ty;
-  return s;
-}
-
 static AstExpr* expr(AstExprType ty) {
   AstExpr* e = calloc(1, sizeof(AstExpr));
   e->ty = ty;
@@ -120,6 +114,13 @@ static AstExpr* parse_factor(ParseContext* cx) {
     AstExpr* e = expr(EXPR_UNARY);
     e->unary.op = UNARY_NOT;
     e->unary.expr = parse_factor(cx);
+    return e;
+  }
+
+  if (match(cx, TK_IDENT)) {
+    Token t = consume(cx);
+    AstExpr* e = expr(EXPR_VAR);
+    e->ident = t.content;
     return e;
   }
 
@@ -171,6 +172,8 @@ static inline BinaryInfo binary_info(TokenType ty) {
       return (BinaryInfo){10, BINARY_AND};
     case TK_PIPEPIPE:
       return (BinaryInfo){5, BINARY_OR};
+    case TK_EQ:
+      return (BinaryInfo){1, BINARY_ASSIGN};
     default:
       return (BinaryInfo){-1, -1};
   }
@@ -181,35 +184,63 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   BinaryInfo info = binary_info(next.ty);
   while (info.prec > 0 && info.prec > min_prec) {
     consume(cx);  // consume the token because it is a bin op
-    AstExpr* rhs = parse_expr(cx, info.prec + 1);
+
+    // EQ is right associative
+    int next_prec = next.ty == TK_EQ ? info.prec : info.prec + 1;
+
+    AstExpr* rhs = parse_expr(cx, next_prec);
     lhs = expr_binary(info.op, lhs, rhs);
+
     next = peek(cx);
     info = binary_info(next.ty);
   }
   return lhs;
 }
 
-static AstStmt* parse_return(ParseContext* cx) {
-  expect(cx, TK_RETURN);
-
-  AstStmt* ret = stmt(STMT_RETURN);
-  ret->ret.expr = parse_expr(cx, 0);
-
-  return ret;
-}
-
-static AstNode* parse_stmt(ParseContext* cx) {
-  AstNode* n = node(NODE_STMT);
+static AstStmt* parse_stmt(ParseContext* cx) {
+  AstStmt* s = calloc(1, sizeof(AstStmt));
 
   if (match(cx, TK_RETURN)) {
-    n->stmt = parse_return(cx);
+    consume(cx);
+    s->ty = STMT_RETURN;
+    s->expr = parse_expr(cx, 0);
+  } else if (match(cx, TK_SEMICOLON)) {
+    s->ty = STMT_NULL;
   } else {
-    emit_error_at(cx, "Unexpected token when parsing statement");
-    return NULL;
+    // Anything else is an expression statement?
+    s->ty = STMT_EXPR;
+    s->expr = parse_expr(cx, 0);
   }
 
   expect(cx, TK_SEMICOLON);
-  return n;
+  return s;
+}
+
+static AstDecl* parse_decl(ParseContext* cx) {
+  expect(cx, TK_INT);
+  Token t = expect(cx, TK_IDENT);
+
+  AstDecl* decl = calloc(1, sizeof(AstDecl));
+  decl->name = t.content;
+
+  if (peek(cx).ty == TK_EQ) {
+    consume(cx);
+    decl->init = parse_expr(cx, 0);
+  }
+
+  expect(cx, TK_SEMICOLON);
+  return decl;
+}
+
+static void parse_block_item(ParseContext* cx, Vec* out) {
+  AstBlockItem* b = vec_push_empty(out);
+  if (peek(cx).ty == TK_INT) {
+    b->ty = BLOCK_DECL;
+    b->decl = parse_decl(cx);
+  } else {
+    b->ty = BLOCK_STMT;
+    b->stmt = parse_stmt(cx);
+  }
 }
 
 AstNode* parse_function(ParseContext* cx) {
@@ -224,10 +255,11 @@ AstNode* parse_function(ParseContext* cx) {
   expect(cx, TK_CLOSE_PAREN);
   expect(cx, TK_OPEN_BRACE);
 
-  fn->fn.body = parse_stmt(cx);
-  if (fn->fn.body && fn->fn.body->ty != NODE_STMT) {
-    emit_error_at(cx, "Unexpected function body");
+  fn->fn.body = vec_new(sizeof(AstBlockItem));
+  while (peek(cx).ty != TK_CLOSE_BRACE) {
+    parse_block_item(cx, fn->fn.body);
   }
+
   expect(cx, TK_CLOSE_BRACE);
 
   return fn;
