@@ -88,6 +88,10 @@ static inline IrInstruction jmp_cnd(IrType ty, IrVal* cnd, String* label) {
   };
 }
 
+static inline IrInstruction copy(IrVal* src, IrVal* dst) {
+  return unary(IR_COPY, src, dst);
+}
+
 //
 // Helpers for pushing instructions
 //
@@ -147,6 +151,12 @@ static IrVal* gen_binary(AstExpr* expr, Vec* out) {
   return dst;
 }
 
+static IrVal* gen_assign(IrVal* lhs, AstExpr* rhs, Vec* out) {
+  IrVal* src = gen_expr(rhs, out);
+  push_inst(out, copy(src, lhs));
+  return lhs;
+}
+
 static IrVal* gen_expr(AstExpr* expr, Vec* out) {
   switch (expr->ty) {
     case EXPR_BINARY: {
@@ -170,7 +180,7 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         push_inst(out, jmp_cnd(IR_JZ, e2, false_label.label));
 
         // result = 1
-        push_inst(out, unary(IR_COPY, constant(1), result));
+        push_inst(out, copy(constant(1), result));
 
         // jmp AND_END
         push_inst(out, jmp(end_label.label));
@@ -179,7 +189,7 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         push_inst(out, false_label);
 
         // result = 0
-        push_inst(out, unary(IR_COPY, constant(0), result));
+        push_inst(out, copy(constant(0), result));
 
         // AND_END
         push_inst(out, end_label);
@@ -204,7 +214,7 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         push_inst(out, jmp_cnd(IR_JNZ, e2, true_label.label));
 
         // result = 0
-        push_inst(out, unary(IR_COPY, constant(0), result));
+        push_inst(out, copy(constant(0), result));
 
         // jmp OR_END
         push_inst(out, jmp(end_label.label));
@@ -213,13 +223,19 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         push_inst(out, true_label);
 
         // result = 1
-        push_inst(out, unary(IR_COPY, constant(1), result));
+        push_inst(out, copy(constant(1), result));
 
         // OR_END
         push_inst(out, end_label);
 
         return result;
+      } else if (expr->binary.op == BINARY_ASSIGN) {
+        if (expr->binary.lhs->ty != EXPR_VAR) {
+          panic("Expected var LHS but got %u", expr->binary.lhs->ty);
+        }
 
+        IrVal* lhs = gen_expr(expr->binary.lhs, out);
+        return gen_assign(lhs, expr->binary.rhs, out);
       } else {
         return gen_binary(expr, out);
       }
@@ -246,6 +262,8 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
       push_inst(out, unary(unary_op, operand, dst));
       return dst;
     }
+    case EXPR_VAR:
+      return var(expr->ident);
     default:
       panic("Unexpected AstStmt type: %lu", expr->ty);
   }
@@ -256,10 +274,32 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
     case STMT_RETURN: {
       IrVal* expr = gen_expr(stmt->expr, out);
       push_inst(out, unary_no_dst(IR_RET, expr));
-      break;
+      return;
     }
+    case STMT_EXPR:
+      gen_expr(stmt->expr, out);
+      return;
+    case STMT_NULL:
+      return;
     default:
       panic("Unexpected AstStmt type: %lu", stmt->ty);
+  }
+}
+
+static void gen_decl(AstDecl* decl, Vec* out) {
+  if (!decl->init) {
+    return;
+  }
+
+  IrVal* lhs = var(decl->name);
+  gen_assign(lhs, decl->init, out);
+}
+
+static void gen_block_item(AstBlockItem* block_item, Vec* out) {
+  if (block_item->ty == BLOCK_DECL) {
+    gen_decl(block_item->decl, out);
+  } else {
+    gen_statement(block_item->stmt, out);
   }
 }
 
@@ -267,7 +307,13 @@ static IrFunction* gen_function(AstNode* ast_function) {
   IrFunction* ir_function = calloc(1, sizeof(IrFunction));
   ir_function->instructions = vec_new(sizeof(IrInstruction));
   ir_function->name = ast_function->fn.name;
-  // gen_statement(ast_function->fn.body->stmt, ir_function->instructions);
+
+  vec_for_each(ast_function->fn.body, AstBlockItem, block_item) {
+    gen_block_item(iter.block_item, ir_function->instructions);
+  }
+
+  // Always return 0 from every function
+  push_inst(ir_function->instructions, unary_no_dst(IR_RET, constant(0)));
   return ir_function;
 }
 

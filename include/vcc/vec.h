@@ -73,7 +73,7 @@ void vec_concat(Vec* v1, Vec* v2);
       struct {                                                             \
         size_t i;                                                          \
         item_type* item;                                                   \
-      } iter = {0, vec_get(vec, 0)};                                       \
+      } iter = {0, vec->len ? vec_get(vec, 0) : 0};                        \
       iter.i < vec->len; ++iter.i,                                         \
         iter.item = (iter.i < vec->len) ? (item_type*)vec_get(vec, iter.i) \
                                         : NULL)
