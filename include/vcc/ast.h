@@ -127,6 +127,6 @@ typedef struct {
   AstNode* main_function;
 } AstProgram;
 
-AstProgram* parse_ast(Vec* tokens);
+AstProgram* parse_ast(Vec* tokens, bool do_variable_resolution);
 
 #endif  // VCC_AST_H

@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <vcc/ast.h>
+#include <vcc/hashmap.h>
 #include <vcc/lex.h>
 
 //
@@ -13,6 +14,11 @@ typedef struct {
   const Vec* tokens;
   size_t idx;
   bool err;
+
+  // For variable resolution
+  bool do_variable_resolution;
+  size_t var_count;
+  Hashmap* var_map;  // Hashmap<String, String>
 } ParseContext;
 
 // Peek the next token.
@@ -119,8 +125,18 @@ static AstExpr* parse_factor(ParseContext* cx) {
 
   if (match(cx, TK_IDENT)) {
     Token t = consume(cx);
+    String* unique_name = hashmap_get(cx->var_map, t.content);
+    if (!unique_name) {
+      if (cx->do_variable_resolution) {
+        emit_error_at(cx, "Undeclared variable: %s", cstring(t.content));
+        exit(-1);
+      } else {
+        // Hack to work around validate stage
+        unique_name = t.content;
+      }
+    }
     AstExpr* e = expr(EXPR_VAR);
-    e->ident = t.content;
+    e->ident = unique_name;
     return e;
   }
 
@@ -182,11 +198,18 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   AstExpr* lhs = parse_factor(cx);
   Token next = peek(cx);
   BinaryInfo info = binary_info(next.ty);
-  while (info.prec > 0 && info.prec > min_prec) {
+  while (info.prec > 0 && info.prec >= min_prec) {
     consume(cx);  // consume the token because it is a bin op
 
-    // EQ is right associative
-    int next_prec = next.ty == TK_EQ ? info.prec : info.prec + 1;
+    int next_prec = info.prec + 1;
+    if (info.op == BINARY_ASSIGN) {
+      // ASSIGN is right associative so keep parsing at this precedence
+      next_prec = info.prec;
+      if (lhs->ty != EXPR_VAR && cx->do_variable_resolution) {
+        emit_error_at(cx, "LHS of assign not an lvalue: %u", lhs->ty);
+        exit(-1);
+      }
+    }
 
     AstExpr* rhs = parse_expr(cx, next_prec);
     lhs = expr_binary(info.op, lhs, rhs);
@@ -219,9 +242,23 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 static AstDecl* parse_decl(ParseContext* cx) {
   expect(cx, TK_INT);
   Token t = expect(cx, TK_IDENT);
-
   AstDecl* decl = calloc(1, sizeof(AstDecl));
-  decl->name = t.content;
+
+  if (cx->do_variable_resolution) {
+    // Variable renaming ensures all variable names are unique
+    // Generated name should have a period to ensure they don't conflict
+    // with user identifiers.
+    String* unique_var_name =
+        string_format("%s.%u", cstring(t.content), cx->var_count++);
+    if (hashmap_get(cx->var_map, t.content) != NULL) {
+      emit_error_at(cx, "Variable %s redefined", t.content);
+      exit(-1);
+    }
+    hashmap_put(cx->var_map, t.content, unique_var_name);
+    decl->name = unique_var_name;
+  } else {
+    decl->name = t.content;
+  }
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
@@ -265,8 +302,13 @@ AstNode* parse_function(ParseContext* cx) {
   return fn;
 }
 
-AstProgram* parse_ast(Vec* tokens) {
-  ParseContext cx = {.tokens = tokens, .idx = 0, .err = false};
+AstProgram* parse_ast(Vec* tokens, bool do_variable_resolution) {
+  ParseContext cx = {.tokens = tokens,
+                     .idx = 0,
+                     .err = false,
+                     .do_variable_resolution = do_variable_resolution,
+                     .var_count = 0,
+                     .var_map = hashmap_new()};
   AstProgram* prog = calloc(1, sizeof(AstProgram));
 
   prog->main_function = parse_function(&cx);

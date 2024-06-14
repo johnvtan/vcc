@@ -15,9 +15,11 @@ static IrVal* var(String* name) {
 // Generates a unique temporary IrVal with the name "tmp.n"
 // This is guaranteed to be unique because n increments every time temp() is
 // called. And C variable names aren't allowed to contain periods.
+// IR temps start with a period to ensure they don't conflict with temps created
+// during variable resolution in parsing.
 static IrVal* temp(void) {
   static int n = 0;
-  return var(string_format("tmp.%d", n++));
+  return var(string_format(".tmp.%d", n++));
 }
 
 static IrVal* constant(int val) {

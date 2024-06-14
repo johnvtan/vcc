@@ -13,19 +13,22 @@
 static const struct option long_options[] = {
     {"lex", optional_argument, NULL, 'l'},
     {"parse", optional_argument, NULL, 'p'},
+    {"validate", optional_argument, NULL, 'v'},
     {"tacky", optional_argument, NULL, 't'},
     {"codegen", optional_argument, NULL, 'c'},
     {0},
 };
 
 typedef struct {
-  enum { LEX, PARSE, TACKY, CODEGEN, EMIT } stage;
+  enum { LEX, PARSE, VALIDATE, TACKY, CODEGEN, EMIT } stage;
   char* input;
   char* output;
 } CompilerArgs;
 
 void usage(void) {
-  printf("vcc [--lex/--parse/--codegen/...flags] <input> <output>\n");
+  printf(
+      "vcc [--lex/--parse/--validate/--tacky/--codegen/...flags] <input> "
+      "<output>\n");
   exit(-1);
 }
 
@@ -35,13 +38,17 @@ CompilerArgs parse_args(int argc, char** argv) {
 
   // Note: options will override each other, so the last one wins.
   char ch;
-  while ((ch = getopt_long(argc, argv, "l:p:c:", long_options, NULL)) != -1) {
+  while ((ch = getopt_long(argc, argv, "l:p:c:t:v:", long_options, NULL)) !=
+         -1) {
     switch (ch) {
       case 'l':
         args.stage = LEX;
         continue;
       case 'p':
         args.stage = PARSE;
+        continue;
+      case 'v':
+        args.stage = VALIDATE;
         continue;
       case 't':
         args.stage = TACKY;
@@ -80,11 +87,15 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  AstProgram* prog = parse_ast(tokens);
+  AstProgram* prog = parse_ast(tokens, args.stage >= VALIDATE);
   if (!prog) {
     return -1;
   }
   if (args.stage == PARSE) {
+    return 0;
+  }
+
+  if (args.stage == VALIDATE) {
     return 0;
   }
 
