@@ -33,6 +33,11 @@ typedef enum {
   TK_GT,
   TK_LTEQ,
   TK_GTEQ,
+  TK_PLUSEQ,
+  TK_DASHEQ,
+  TK_STAREQ,
+  TK_SLASHEQ,
+  TK_PERCENTEQ,
 
   TK_IDENT,
   TK_NUM_CONST,

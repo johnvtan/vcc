@@ -103,7 +103,6 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 // Functions that walk the AST and generate IR instructions
 //
 static IrVal* gen_expr(AstExpr* expr, Vec* out);
-
 static IrVal* gen_binary(AstExpr* expr, Vec* out) {
   IrVal* lhs = gen_expr(expr->binary.lhs, out);
   IrVal* rhs = gen_expr(expr->binary.rhs, out);

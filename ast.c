@@ -155,6 +155,7 @@ static AstExpr* parse_factor(ParseContext* cx) {
 typedef struct {
   int prec;
   int op;
+  bool is_assign;
 } BinaryInfo;
 
 // For binary operators, returns the BinaryInfo.
@@ -163,37 +164,48 @@ typedef struct {
 static inline BinaryInfo binary_info(TokenType ty) {
   switch (ty) {
     case TK_PLUS:
-      return (BinaryInfo){45, BINARY_ADD};
+      return (BinaryInfo){45, BINARY_ADD, false};
     case TK_DASH:
-      return (BinaryInfo){45, BINARY_SUB};
+      return (BinaryInfo){45, BINARY_SUB, false};
     case TK_STAR:
-      return (BinaryInfo){50, BINARY_MUL};
+      return (BinaryInfo){50, BINARY_MUL, false};
     case TK_SLASH:
-      return (BinaryInfo){50, BINARY_DIV};
+      return (BinaryInfo){50, BINARY_DIV, false};
     case TK_PERCENT:
-      return (BinaryInfo){50, BINARY_REM};
+      return (BinaryInfo){50, BINARY_REM, false};
     case TK_LT:
-      return (BinaryInfo){35, BINARY_LT};
+      return (BinaryInfo){35, BINARY_LT, false};
     case TK_LTEQ:
-      return (BinaryInfo){35, BINARY_LTEQ};
+      return (BinaryInfo){35, BINARY_LTEQ, false};
     case TK_GT:
-      return (BinaryInfo){35, BINARY_GT};
+      return (BinaryInfo){35, BINARY_GT, false};
     case TK_GTEQ:
-      return (BinaryInfo){35, BINARY_GTEQ};
+      return (BinaryInfo){35, BINARY_GTEQ, false};
     case TK_EQEQ:
-      return (BinaryInfo){30, BINARY_EQ};
+      return (BinaryInfo){30, BINARY_EQ, false};
     case TK_BANGEQ:
-      return (BinaryInfo){30, BINARY_NEQ};
+      return (BinaryInfo){30, BINARY_NEQ, false};
     case TK_AMPAMP:
-      return (BinaryInfo){10, BINARY_AND};
+      return (BinaryInfo){10, BINARY_AND, false};
     case TK_PIPEPIPE:
-      return (BinaryInfo){5, BINARY_OR};
+      return (BinaryInfo){5, BINARY_OR, false};
     case TK_EQ:
-      return (BinaryInfo){1, BINARY_ASSIGN};
+      return (BinaryInfo){1, BINARY_ASSIGN, true};
+    case TK_PLUSEQ:
+      return (BinaryInfo){1, BINARY_ADD, true};
+    case TK_DASHEQ:
+      return (BinaryInfo){1, BINARY_SUB, true};
+    case TK_STAREQ:
+      return (BinaryInfo){1, BINARY_MUL, true};
+    case TK_SLASHEQ:
+      return (BinaryInfo){1, BINARY_DIV, true};
+    case TK_PERCENTEQ:
+      return (BinaryInfo){1, BINARY_REM, true};
     default:
-      return (BinaryInfo){-1, -1};
+      return (BinaryInfo){-1, -1, false};
   }
 }
+
 static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   AstExpr* lhs = parse_factor(cx);
   Token next = peek(cx);
@@ -201,18 +213,28 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   while (info.prec > 0 && info.prec >= min_prec) {
     consume(cx);  // consume the token because it is a bin op
 
-    int next_prec = info.prec + 1;
-    if (info.op == BINARY_ASSIGN) {
-      // ASSIGN is right associative so keep parsing at this precedence
-      next_prec = info.prec;
+    if (info.is_assign) {
+      // rewrite compound assigns
+      // e.g., a += 3 --> a = a + 3
+
+      // Check valid lhs
       if (lhs->ty != EXPR_VAR && cx->do_variable_resolution) {
         emit_error_at(cx, "LHS of assign not an lvalue: %u", lhs->ty);
         exit(-1);
       }
-    }
 
-    AstExpr* rhs = parse_expr(cx, next_prec);
-    lhs = expr_binary(info.op, lhs, rhs);
+      // assigns are right associative
+      AstExpr* rhs = parse_expr(cx, info.prec);
+      if (info.op != BINARY_ASSIGN) {
+        // e.g., lhs + rhs if compound assign
+        rhs = expr_binary(info.op, lhs, rhs);
+      }
+
+      lhs = expr_binary(BINARY_ASSIGN, lhs, rhs);
+    } else {
+      AstExpr* rhs = parse_expr(cx, info.prec + 1);
+      lhs = expr_binary(info.op, lhs, rhs);
+    }
 
     next = peek(cx);
     info = binary_info(next.ty);
