@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <vcc/errors.h>
 #include <vcc/ir.h>
@@ -103,6 +104,54 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 // Functions that walk the AST and generate IR instructions
 //
 static IrVal* gen_expr(AstExpr* expr, Vec* out);
+static IrVal* gen_unary(AstExpr* expr, Vec* out) {
+  IrVal* operand = gen_expr(expr->unary.expr, out);
+
+  // Handle pre/postinc unary functions
+  if (expr->unary.op == UNARY_PREINC) {
+    push_inst(out, binary(IR_ADD, operand, constant(1), operand));
+    return operand;
+  }
+
+  if (expr->unary.op == UNARY_PREDEC) {
+    push_inst(out, binary(IR_SUB, operand, constant(1), operand));
+    return operand;
+  }
+
+  if (expr->unary.op == UNARY_POSTINC) {
+    IrVal* ret = temp();
+    push_inst(out, copy(operand, ret));
+    push_inst(out, binary(IR_ADD, operand, constant(1), operand));
+    return ret;
+  }
+
+  if (expr->unary.op == UNARY_POSTDEC) {
+    IrVal* ret = temp();
+    push_inst(out, copy(operand, ret));
+    push_inst(out, binary(IR_SUB, operand, constant(1), operand));
+    return ret;
+  }
+
+  // General case for unary --> generate an IR unary
+  IrType unary_op = IR_UNKNOWN;
+  switch (expr->unary.op) {
+    case UNARY_COMPLEMENT:
+      unary_op = IR_UNARY_COMPLEMENT;
+      break;
+    case UNARY_NEG:
+      unary_op = IR_UNARY_NEG;
+      break;
+    case UNARY_NOT:
+      unary_op = IR_UNARY_NOT;
+      break;
+    default:
+      panic("Unexpected AstFact type: %lu", expr->unary.op);
+  }
+  IrVal* dst = temp();
+  push_inst(out, unary(unary_op, operand, dst));
+  return dst;
+}
+
 static IrVal* gen_binary(AstExpr* expr, Vec* out) {
   IrVal* lhs = gen_expr(expr->binary.lhs, out);
   IrVal* rhs = gen_expr(expr->binary.rhs, out);
@@ -241,26 +290,8 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
     }
     case EXPR_INT_CONST:
       return constant(expr->int_const);
-    case EXPR_UNARY: {
-      IrVal* operand = gen_expr(expr->unary.expr, out);
-      IrType unary_op = IR_UNKNOWN;
-      switch (expr->unary.op) {
-        case UNARY_COMPLEMENT:
-          unary_op = IR_UNARY_COMPLEMENT;
-          break;
-        case UNARY_NEG:
-          unary_op = IR_UNARY_NEG;
-          break;
-        case UNARY_NOT:
-          unary_op = IR_UNARY_NOT;
-          break;
-        default:
-          panic("Unexpected AstFact type: %lu", expr->unary.op);
-      }
-      IrVal* dst = temp();
-      push_inst(out, unary(unary_op, operand, dst));
-      return dst;
-    }
+    case EXPR_UNARY:
+      return gen_unary(expr, out);
     case EXPR_VAR:
       return var(expr->ident);
     default:

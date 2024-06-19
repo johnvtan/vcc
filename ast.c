@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <vcc/ast.h>
 #include <vcc/hashmap.h>
@@ -164,6 +165,7 @@ static AstExpr* parse_postfix_unary(ParseContext* cx) {
       AstExpr* postfix = expr(EXPR_UNARY);
       postfix->unary.op = UNARY_POSTINC;
       postfix->unary.expr = e;
+      e = postfix;
       continue;
     }
 
@@ -173,6 +175,7 @@ static AstExpr* parse_postfix_unary(ParseContext* cx) {
       AstExpr* postfix = expr(EXPR_UNARY);
       postfix->unary.op = UNARY_POSTDEC;
       postfix->unary.expr = e;
+      e = postfix;
       continue;
     }
   }
