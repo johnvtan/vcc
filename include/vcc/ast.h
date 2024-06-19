@@ -28,6 +28,10 @@ struct AstExpr {
         UNARY_NEG,
         UNARY_COMPLEMENT,
         UNARY_NOT,
+        UNARY_PREINC,
+        UNARY_PREDEC,
+        UNARY_POSTINC,
+        UNARY_POSTDEC,
       } op;
       struct AstExpr* expr;
     } unary;

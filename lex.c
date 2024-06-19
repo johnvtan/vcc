@@ -17,6 +17,8 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_OPEN_PAREN, "("},  {TK_CLOSE_PAREN, ")"}, {TK_OPEN_BRACE, "{"},
     {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},   {TK_TILDE, "~"},
     {TK_DASH, "-"},        {TK_DASHDASH, "--"},   {TK_PLUS, "+"},
+    {TK_PLUSPLUS, "++"},
+
     {TK_STAR, "*"},        {TK_SLASH, "/"},       {TK_PERCENT, "%"},
     {TK_BANG, "!"},        {TK_AMPAMP, "&&"},     {TK_PIPEPIPE, "||"},
     {TK_EQEQ, "=="},       {TK_BANGEQ, "!="},     {TK_LT, "<"},

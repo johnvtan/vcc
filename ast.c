@@ -61,12 +61,18 @@ static Token expect(ParseContext* cx, TokenType ty) {
   return curr;
 }
 
+static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
+  if (cx->do_variable_resolution && val->ty != EXPR_VAR) {
+    emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
+    exit(-1);
+  }
+}
+
 //
 // Ast type helper funcs
 //
 
 static AstExpr* parse_expr(ParseContext* cx, int min_prec);
-static AstExpr* parse_factor(ParseContext* cx);
 
 static AstNode* node(AstNodeType ty) {
   AstNode* n = calloc(1, sizeof(AstNode));
@@ -91,36 +97,19 @@ static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
 //
 // Recursive descent parsing functions
 //
-static AstExpr* parse_factor(ParseContext* cx) {
+#define PREC_MIN (15)
+#define PREC_MAX (1)
+
+// These are the highest precedence operators, i.e.
+// they correspond to precedence 2/1/0 in
+// https://en.cppreference.com/w/c/language/operator_precedence
+static AstExpr* parse_prefix_unary(ParseContext* cx);
+static AstExpr* parse_primary(ParseContext* cx) {
   if (match(cx, TK_NUM_CONST)) {
     Token t = consume(cx);
     AstExpr* int_const = expr(EXPR_INT_CONST);
     int_const->int_const = strtol(cstring(t.content), NULL, 10);
     return int_const;
-  }
-
-  if (match(cx, TK_TILDE)) {
-    consume(cx);
-    AstExpr* e = expr(EXPR_UNARY);
-    e->unary.op = UNARY_COMPLEMENT;
-    e->unary.expr = parse_factor(cx);
-    return e;
-  }
-
-  if (match(cx, TK_DASH)) {
-    consume(cx);
-    AstExpr* e = expr(EXPR_UNARY);
-    e->unary.op = UNARY_NEG;
-    e->unary.expr = parse_factor(cx);
-    return e;
-  }
-
-  if (match(cx, TK_BANG)) {
-    consume(cx);
-    AstExpr* e = expr(EXPR_UNARY);
-    e->unary.op = UNARY_NOT;
-    e->unary.expr = parse_factor(cx);
-    return e;
   }
 
   if (match(cx, TK_IDENT)) {
@@ -142,14 +131,99 @@ static AstExpr* parse_factor(ParseContext* cx) {
 
   if (match(cx, TK_OPEN_PAREN)) {
     consume(cx);
-    AstExpr* e = parse_expr(cx, 0);
+    AstExpr* e = parse_expr(cx, PREC_MIN);
     expect(cx, TK_CLOSE_PAREN);
     return e;
   }
 
-  emit_error_at(cx, "Unexpected token when parsing factor: %s",
-                cstring(peek(cx).content));
+  emit_error_at(cx, "Unexpected token when parsing primary: %s, %u",
+                cstring(peek(cx).content), peek(cx).ty);
   exit(-1);
+}
+
+static inline bool is_postfix_op(TokenType ty) {
+  switch (ty) {
+    case TK_PLUSPLUS:
+    case TK_DASHDASH:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static AstExpr* parse_postfix_unary(ParseContext* cx) {
+  AstExpr* e = parse_primary(cx);
+
+  // Avoid left recursion by turning this into a loop
+  // postfix rule is something like:
+  // postfix_unary := postfix_unary postfix_op | primary
+  while (is_postfix_op(peek(cx).ty)) {
+    if (match(cx, TK_PLUSPLUS)) {
+      consume(cx);
+      assert_lvalue(cx, e);
+      AstExpr* postfix = expr(EXPR_UNARY);
+      postfix->unary.op = UNARY_POSTINC;
+      postfix->unary.expr = e;
+      continue;
+    }
+
+    if (match(cx, TK_DASHDASH)) {
+      consume(cx);
+      assert_lvalue(cx, e);
+      AstExpr* postfix = expr(EXPR_UNARY);
+      postfix->unary.op = UNARY_POSTDEC;
+      postfix->unary.expr = e;
+      continue;
+    }
+  }
+
+  return e;
+}
+
+static AstExpr* parse_prefix_unary(ParseContext* cx) {
+  if (match(cx, TK_TILDE)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_COMPLEMENT;
+    e->unary.expr = parse_prefix_unary(cx);
+    return e;
+  }
+
+  if (match(cx, TK_DASH)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_NEG;
+    e->unary.expr = parse_prefix_unary(cx);
+    return e;
+  }
+
+  if (match(cx, TK_BANG)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_NOT;
+    e->unary.expr = parse_prefix_unary(cx);
+    return e;
+  }
+
+  if (match(cx, TK_PLUSPLUS)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_PREINC;
+    e->unary.expr = parse_prefix_unary(cx);
+    assert_lvalue(cx, e->unary.expr);
+    return e;
+  }
+
+  if (match(cx, TK_DASHDASH)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_PREDEC;
+    e->unary.expr = parse_prefix_unary(cx);
+    assert_lvalue(cx, e->unary.expr);
+    return e;
+  }
+
+  return parse_postfix_unary(cx);
 }
 
 typedef struct {
@@ -163,65 +237,60 @@ typedef struct {
 // Returns {-1, -1} if not a binary operator.
 static inline BinaryInfo binary_info(TokenType ty) {
   switch (ty) {
-    case TK_PLUS:
-      return (BinaryInfo){45, BINARY_ADD, false};
-    case TK_DASH:
-      return (BinaryInfo){45, BINARY_SUB, false};
     case TK_STAR:
-      return (BinaryInfo){50, BINARY_MUL, false};
+      return (BinaryInfo){3, BINARY_MUL, false};
     case TK_SLASH:
-      return (BinaryInfo){50, BINARY_DIV, false};
+      return (BinaryInfo){3, BINARY_DIV, false};
     case TK_PERCENT:
-      return (BinaryInfo){50, BINARY_REM, false};
+      return (BinaryInfo){3, BINARY_REM, false};
+    case TK_PLUS:
+      return (BinaryInfo){4, BINARY_ADD, false};
+    case TK_DASH:
+      return (BinaryInfo){4, BINARY_SUB, false};
     case TK_LT:
-      return (BinaryInfo){35, BINARY_LT, false};
+      return (BinaryInfo){6, BINARY_LT, false};
     case TK_LTEQ:
-      return (BinaryInfo){35, BINARY_LTEQ, false};
+      return (BinaryInfo){6, BINARY_LTEQ, false};
     case TK_GT:
-      return (BinaryInfo){35, BINARY_GT, false};
+      return (BinaryInfo){6, BINARY_GT, false};
     case TK_GTEQ:
-      return (BinaryInfo){35, BINARY_GTEQ, false};
+      return (BinaryInfo){6, BINARY_GTEQ, false};
     case TK_EQEQ:
-      return (BinaryInfo){30, BINARY_EQ, false};
+      return (BinaryInfo){7, BINARY_EQ, false};
     case TK_BANGEQ:
-      return (BinaryInfo){30, BINARY_NEQ, false};
+      return (BinaryInfo){7, BINARY_NEQ, false};
     case TK_AMPAMP:
-      return (BinaryInfo){10, BINARY_AND, false};
+      return (BinaryInfo){11, BINARY_AND, false};
     case TK_PIPEPIPE:
-      return (BinaryInfo){5, BINARY_OR, false};
+      return (BinaryInfo){12, BINARY_OR, false};
     case TK_EQ:
-      return (BinaryInfo){1, BINARY_ASSIGN, true};
+      return (BinaryInfo){14, BINARY_ASSIGN, true};
     case TK_PLUSEQ:
-      return (BinaryInfo){1, BINARY_ADD, true};
+      return (BinaryInfo){14, BINARY_ADD, true};
     case TK_DASHEQ:
-      return (BinaryInfo){1, BINARY_SUB, true};
+      return (BinaryInfo){14, BINARY_SUB, true};
     case TK_STAREQ:
-      return (BinaryInfo){1, BINARY_MUL, true};
+      return (BinaryInfo){14, BINARY_MUL, true};
     case TK_SLASHEQ:
-      return (BinaryInfo){1, BINARY_DIV, true};
+      return (BinaryInfo){14, BINARY_DIV, true};
     case TK_PERCENTEQ:
-      return (BinaryInfo){1, BINARY_REM, true};
+      return (BinaryInfo){14, BINARY_REM, true};
     default:
       return (BinaryInfo){-1, -1, false};
   }
 }
 
 static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
-  AstExpr* lhs = parse_factor(cx);
+  AstExpr* lhs = parse_prefix_unary(cx);
   Token next = peek(cx);
   BinaryInfo info = binary_info(next.ty);
-  while (info.prec > 0 && info.prec >= min_prec) {
+  while (info.prec > 0 && info.prec <= min_prec) {
     consume(cx);  // consume the token because it is a bin op
 
     if (info.is_assign) {
       // rewrite compound assigns
       // e.g., a += 3 --> a = a + 3
-
-      // Check valid lhs
-      if (lhs->ty != EXPR_VAR && cx->do_variable_resolution) {
-        emit_error_at(cx, "LHS of assign not an lvalue: %u", lhs->ty);
-        exit(-1);
-      }
+      assert_lvalue(cx, lhs);
 
       // assigns are right associative
       AstExpr* rhs = parse_expr(cx, info.prec);
@@ -232,7 +301,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
 
       lhs = expr_binary(BINARY_ASSIGN, lhs, rhs);
     } else {
-      AstExpr* rhs = parse_expr(cx, info.prec + 1);
+      AstExpr* rhs = parse_expr(cx, info.prec - 1);
       lhs = expr_binary(info.op, lhs, rhs);
     }
 
@@ -248,13 +317,13 @@ static AstStmt* parse_stmt(ParseContext* cx) {
   if (match(cx, TK_RETURN)) {
     consume(cx);
     s->ty = STMT_RETURN;
-    s->expr = parse_expr(cx, 0);
+    s->expr = parse_expr(cx, PREC_MIN);
   } else if (match(cx, TK_SEMICOLON)) {
     s->ty = STMT_NULL;
   } else {
     // Anything else is an expression statement?
     s->ty = STMT_EXPR;
-    s->expr = parse_expr(cx, 0);
+    s->expr = parse_expr(cx, PREC_MIN);
   }
 
   expect(cx, TK_SEMICOLON);
@@ -284,7 +353,7 @@ static AstDecl* parse_decl(ParseContext* cx) {
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
-    decl->init = parse_expr(cx, 0);
+    decl->init = parse_expr(cx, PREC_MIN);
   }
 
   expect(cx, TK_SEMICOLON);
