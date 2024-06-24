@@ -95,6 +95,14 @@ static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
   return e;
 }
 
+static AstExpr* expr_ternary(AstExpr* cond, AstExpr* then, AstExpr* else_) {
+  AstExpr* e = expr(EXPR_TERNARY);
+  e->ternary.cond = cond;
+  e->ternary.then = then;
+  e->ternary.else_ = else_;
+  return e;
+}
+
 //
 // Recursive descent parsing functions
 //
@@ -266,6 +274,9 @@ static inline BinaryInfo binary_info(TokenType ty) {
       return (BinaryInfo){11, BINARY_AND, false};
     case TK_PIPEPIPE:
       return (BinaryInfo){12, BINARY_OR, false};
+    case TK_QUESTION:
+      // This is a ternary, so the operator field isn't used
+      return (BinaryInfo){13, -1, false};
     case TK_EQ:
       return (BinaryInfo){14, BINARY_ASSIGN, true};
     case TK_PLUSEQ:
@@ -289,7 +300,6 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   BinaryInfo info = binary_info(next.ty);
   while (info.prec > 0 && info.prec <= min_prec) {
     consume(cx);  // consume the token because it is a bin op
-
     if (info.is_assign) {
       // rewrite compound assigns
       // e.g., a += 3 --> a = a + 3
@@ -303,6 +313,18 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
       }
 
       lhs = expr_binary(BINARY_ASSIGN, lhs, rhs);
+    } else if (next.ty == TK_QUESTION) {
+      // parse ternary
+      // Question mark was already consumed
+      AstExpr* then = parse_expr(cx, PREC_MIN);
+      expect(cx, TK_COLON);
+
+      // Ternary is right associative
+      AstExpr* else_ = parse_expr(cx, info.prec);
+
+      // Existing lhs is the condition
+      lhs = expr_ternary(lhs, then, else_);
+
     } else {
       AstExpr* rhs = parse_expr(cx, info.prec - 1);
       lhs = expr_binary(info.op, lhs, rhs);
@@ -321,15 +343,30 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     consume(cx);
     s->ty = STMT_RETURN;
     s->expr = parse_expr(cx, PREC_MIN);
+    expect(cx, TK_SEMICOLON);
   } else if (match(cx, TK_SEMICOLON)) {
     s->ty = STMT_NULL;
+    expect(cx, TK_SEMICOLON);
+  } else if (match(cx, TK_IF)) {
+    s->ty = STMT_IF;
+
+    consume(cx);
+    expect(cx, TK_OPEN_PAREN);
+    s->if_.cond = parse_expr(cx, PREC_MIN);
+    expect(cx, TK_CLOSE_PAREN);
+
+    s->if_.then = parse_stmt(cx);
+    if (match(cx, TK_ELSE)) {
+      consume(cx);
+      s->if_.else_ = parse_stmt(cx);
+    }
   } else {
     // Anything else is an expression statement?
     s->ty = STMT_EXPR;
     s->expr = parse_expr(cx, PREC_MIN);
+    expect(cx, TK_SEMICOLON);
   }
 
-  expect(cx, TK_SEMICOLON);
   return s;
 }
 

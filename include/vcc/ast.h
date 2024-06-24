@@ -14,6 +14,7 @@ typedef enum {
   EXPR_UNARY,
   EXPR_INT_CONST,
   EXPR_VAR,
+  EXPR_TERNARY,
 } AstExprType;
 
 struct AstExpr {
@@ -33,7 +34,7 @@ struct AstExpr {
         UNARY_POSTINC,
         UNARY_POSTDEC,
       } op;
-      struct AstExpr* expr;
+      AstExpr* expr;
     } unary;
 
     // EXPR_BINARY
@@ -54,9 +55,15 @@ struct AstExpr {
         BINARY_GTEQ,
         BINARY_ASSIGN,
       } op;
-      struct AstExpr* lhs;
-      struct AstExpr* rhs;
+      AstExpr* lhs;
+      AstExpr* rhs;
     } binary;
+
+    struct {
+      AstExpr* cond;
+      AstExpr* then;
+      AstExpr* else_;
+    } ternary;
 
     // EXPR_VAR
     String* ident;
@@ -69,15 +76,24 @@ struct AstExpr {
 typedef enum {
   STMT_RETURN,
   STMT_EXPR,
+  STMT_IF,
   STMT_NULL,
 } AstStmtType;
 
-typedef struct {
+typedef struct AstStmt AstStmt;
+
+struct AstStmt {
   AstStmtType ty;
   union {
     AstExpr* expr;
+
+    struct {
+      AstExpr* cond;
+      AstStmt* then;
+      AstStmt* else_;
+    } if_;
   };
-} AstStmt;
+};
 
 typedef struct {
   String* name;

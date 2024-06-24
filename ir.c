@@ -205,8 +205,46 @@ static IrVal* gen_assign(IrVal* lhs, AstExpr* rhs, Vec* out) {
   return lhs;
 }
 
+// The caller generates then/else into separate vectors of IR instructions.
+// This function arranges them with the appropriate jumps and puts them in
+// |out|. This assumes that |cond| has already been put into |out|.
+static void arrange_conditional(IrVal* cond, Vec* then, Vec* else_, Vec* out) {
+  IrInstruction else_label =
+      else_ ? label(".COND_ELSE") : label(".THIS_SHOULDNT_BE_HERE");
+  IrInstruction end_label = label(".COND_END");
+
+  push_inst(out,
+            jmp_cnd(IR_JZ, cond, else_ ? else_label.label : end_label.label));
+  vec_concat(out, then);
+  if (else_) {
+    push_inst(out, jmp(end_label.label));
+    push_inst(out, else_label);
+    vec_concat(out, else_);
+  }
+
+  push_inst(out, end_label);
+}
+
 static IrVal* gen_expr(AstExpr* expr, Vec* out) {
   switch (expr->ty) {
+    case EXPR_TERNARY: {
+      IrVal* cond = gen_expr(expr->ternary.cond, out);
+      IrVal* ternary_result = temp();
+
+      // Generate then/else into separate vectors, which get arranged
+      // later in call to arrange_conditional.
+      Vec* then_ir = vec_new(sizeof(IrInstruction));
+      IrVal* then_result = gen_expr(expr->ternary.then, then_ir);
+      push_inst(then_ir, copy(then_result, ternary_result));
+
+      Vec* else_ir = vec_new(sizeof(IrInstruction));
+      IrVal* else_result = gen_expr(expr->ternary.else_, else_ir);
+      push_inst(else_ir, copy(else_result, ternary_result));
+
+      arrange_conditional(cond, then_ir, else_ir, out);
+
+      return ternary_result;
+    }
     case EXPR_BINARY: {
       // AND and OR are special because they have to short circuit.
       if (expr->binary.op == BINARY_AND) {
@@ -311,6 +349,21 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       return;
     case STMT_NULL:
       return;
+    case STMT_IF: {
+      IrVal* cond = gen_expr(stmt->if_.cond, out);
+
+      Vec* then_ir = vec_new(sizeof(IrInstruction));
+      gen_statement(stmt->if_.then, then_ir);
+
+      Vec* else_ir = NULL;
+      if (stmt->if_.else_) {
+        else_ir = vec_new(sizeof(IrInstruction));
+        gen_statement(stmt->if_.else_, else_ir);
+      }
+
+      arrange_conditional(cond, then_ir, else_ir, out);
+      return;
+    }
     default:
       panic("Unexpected AstStmt type: %lu", stmt->ty);
   }

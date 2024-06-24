@@ -39,6 +39,10 @@ typedef enum {
   TK_STAREQ,
   TK_SLASHEQ,
   TK_PERCENTEQ,
+  TK_IF,
+  TK_ELSE,
+  TK_QUESTION,
+  TK_COLON,
 
   TK_IDENT,
   TK_NUM_CONST,
