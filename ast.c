@@ -280,15 +280,15 @@ static inline BinaryInfo binary_info(TokenType ty) {
     case TK_EQ:
       return (BinaryInfo){14, BINARY_ASSIGN, true};
     case TK_PLUSEQ:
-      return (BinaryInfo){14, BINARY_ADD, true};
+      return (BinaryInfo){14, BINARY_ADD_ASSIGN, true};
     case TK_DASHEQ:
-      return (BinaryInfo){14, BINARY_SUB, true};
+      return (BinaryInfo){14, BINARY_SUB_ASSIGN, true};
     case TK_STAREQ:
-      return (BinaryInfo){14, BINARY_MUL, true};
+      return (BinaryInfo){14, BINARY_MUL_ASSIGN, true};
     case TK_SLASHEQ:
-      return (BinaryInfo){14, BINARY_DIV, true};
+      return (BinaryInfo){14, BINARY_DIV_ASSIGN, true};
     case TK_PERCENTEQ:
-      return (BinaryInfo){14, BINARY_REM, true};
+      return (BinaryInfo){14, BINARY_REM_ASSIGN, true};
     default:
       return (BinaryInfo){-1, -1, false};
   }
@@ -307,12 +307,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
 
       // assigns are right associative
       AstExpr* rhs = parse_expr(cx, info.prec);
-      if (info.op != BINARY_ASSIGN) {
-        // e.g., lhs + rhs if compound assign
-        rhs = expr_binary(info.op, lhs, rhs);
-      }
-
-      lhs = expr_binary(BINARY_ASSIGN, lhs, rhs);
+      lhs = expr_binary(info.op, lhs, rhs);
     } else if (next.ty == TK_QUESTION) {
       // parse ternary
       // Question mark was already consumed
@@ -393,7 +388,14 @@ static AstDecl* parse_decl(ParseContext* cx) {
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
-    decl->init = parse_expr(cx, PREC_MIN);
+
+    // Under the hood, init expressions are rewritten to be
+    // an assign expr.
+    AstExpr* init_expr = parse_expr(cx, PREC_MIN);
+    AstExpr* var = expr(EXPR_VAR);
+    var->ident = decl->name;
+
+    decl->init = expr_binary(BINARY_ASSIGN, var, init_expr);
   }
 
   expect(cx, TK_SEMICOLON);

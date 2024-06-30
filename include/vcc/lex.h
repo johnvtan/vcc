@@ -43,6 +43,7 @@ typedef enum {
   TK_ELSE,
   TK_QUESTION,
   TK_COLON,
+  TK_GOTO,
 
   TK_IDENT,
   TK_NUM_CONST,

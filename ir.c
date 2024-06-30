@@ -199,9 +199,43 @@ static IrVal* gen_binary(AstExpr* expr, Vec* out) {
   return dst;
 }
 
-static IrVal* gen_assign(IrVal* lhs, AstExpr* rhs, Vec* out) {
-  IrVal* src = gen_expr(rhs, out);
-  push_inst(out, copy(src, lhs));
+static inline bool is_assign(int bin_op) { return bin_op >= BINARY_ASSIGN; }
+
+static IrVal* gen_assign(AstExpr* expr, Vec* out) {
+  if (expr->binary.lhs->ty != EXPR_VAR) {
+    panic("Expected var LHS but got %u", expr->binary.lhs->ty);
+  }
+
+  // lhs is ultimately where the result of the expression goes
+  IrVal* lhs = gen_expr(expr->binary.lhs, out);
+
+  // rhs is on the right hand of the assign
+  IrVal* rhs = gen_expr(expr->binary.rhs, out);
+
+  // Handle op, which stores the result in lhs
+  switch (expr->binary.op) {
+    case BINARY_ASSIGN:
+      push_inst(out, copy(rhs, lhs));
+      break;
+    case BINARY_ADD_ASSIGN:
+      push_inst(out, binary(IR_ADD, lhs, rhs, lhs));
+      break;
+    case BINARY_SUB_ASSIGN:
+      push_inst(out, binary(IR_SUB, lhs, rhs, lhs));
+      break;
+    case BINARY_MUL_ASSIGN:
+      push_inst(out, binary(IR_MUL, lhs, rhs, lhs));
+      break;
+    case BINARY_DIV_ASSIGN:
+      push_inst(out, binary(IR_DIV, lhs, rhs, lhs));
+      break;
+    case BINARY_REM_ASSIGN:
+      push_inst(out, binary(IR_REM, lhs, rhs, lhs));
+      break;
+    default:
+      panic("Unexpected bin op %u in assign", expr->binary.op);
+  }
+
   return lhs;
 }
 
@@ -315,13 +349,8 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         push_inst(out, end_label);
 
         return result;
-      } else if (expr->binary.op == BINARY_ASSIGN) {
-        if (expr->binary.lhs->ty != EXPR_VAR) {
-          panic("Expected var LHS but got %u", expr->binary.lhs->ty);
-        }
-
-        IrVal* lhs = gen_expr(expr->binary.lhs, out);
-        return gen_assign(lhs, expr->binary.rhs, out);
+      } else if (is_assign(expr->binary.op)) {
+        return gen_assign(expr, out);
       } else {
         return gen_binary(expr, out);
       }
@@ -374,8 +403,11 @@ static void gen_decl(AstDecl* decl, Vec* out) {
     return;
   }
 
-  IrVal* lhs = var(decl->name);
-  gen_assign(lhs, decl->init, out);
+  if (decl->init->ty != EXPR_BINARY && decl->init->binary.op != BINARY_ASSIGN) {
+    panic("Invalid init decl expr ty %u", decl->init->ty);
+  }
+
+  gen_assign(decl->init, out);
 }
 
 static void gen_block_item(AstBlockItem* block_item, Vec* out) {

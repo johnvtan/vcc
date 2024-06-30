@@ -53,7 +53,16 @@ struct AstExpr {
         BINARY_LTEQ,
         BINARY_GT,
         BINARY_GTEQ,
+
+        // Note: all assigns should be below BINARY_ASSIGN
+        // For ease of checking, assigns are defined as
+        // op >= BINARY_ASSIGN.
         BINARY_ASSIGN,
+        BINARY_ADD_ASSIGN,
+        BINARY_SUB_ASSIGN,
+        BINARY_MUL_ASSIGN,
+        BINARY_DIV_ASSIGN,
+        BINARY_REM_ASSIGN,
       } op;
       AstExpr* lhs;
       AstExpr* rhs;

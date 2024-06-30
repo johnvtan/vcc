@@ -24,7 +24,7 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_GTEQ, ">="},       {TK_EQ, "="},          {TK_PLUSEQ, "+="},
     {TK_DASHEQ, "-="},     {TK_STAREQ, "*="},     {TK_SLASHEQ, "/="},
     {TK_PERCENTEQ, "%="},  {TK_IF, "if"},         {TK_ELSE, "else"},
-    {TK_QUESTION, "?"},    {TK_COLON, ":"},
+    {TK_QUESTION, "?"},    {TK_COLON, ":"},       {TK_GOTO, "goto"},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
