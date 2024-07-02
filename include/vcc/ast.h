@@ -86,6 +86,8 @@ typedef enum {
   STMT_RETURN,
   STMT_EXPR,
   STMT_IF,
+  STMT_GOTO,
+  STMT_LABELED,
   STMT_NULL,
 } AstStmtType;
 
@@ -101,6 +103,15 @@ struct AstStmt {
       AstStmt* then;
       AstStmt* else_;
     } if_;
+
+    // STMT_LABELED
+    struct {
+      String* label;
+      AstStmt* stmt;
+    } labeled;
+
+    // STMT_GOTO
+    String* ident;
   };
 };
 

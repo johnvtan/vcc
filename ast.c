@@ -22,14 +22,17 @@ typedef struct {
   Hashmap* var_map;  // Hashmap<String, String>
 } ParseContext;
 
-// Peek the next token.
-static Token peek(ParseContext* cx) {
-  if (cx->idx >= cx->tokens->len) {
+// Peeks ahead n+1 tokens
+static Token peek_ahead(ParseContext* cx, size_t n) {
+  if (cx->idx + n >= cx->tokens->len) {
     emit_error_no_pos("Expected token but got EOF");
     // vec_get will abort the program if this is true.
   }
-  return *(Token*)(vec_get(cx->tokens, cx->idx));
+  return *(Token*)(vec_get(cx->tokens, cx->idx + n));
 }
+
+// Peek the next token.
+static inline Token peek(ParseContext* cx) { return peek_ahead(cx, 0); }
 
 // Note this makes a temp in case we pass in an rvalue (e.g., &cx).
 // We shouldn't have scoping issues because this is wrapped in its own scope.
@@ -339,10 +342,16 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     s->ty = STMT_RETURN;
     s->expr = parse_expr(cx, PREC_MIN);
     expect(cx, TK_SEMICOLON);
-  } else if (match(cx, TK_SEMICOLON)) {
+    return s;
+  }
+
+  if (match(cx, TK_SEMICOLON)) {
     s->ty = STMT_NULL;
     expect(cx, TK_SEMICOLON);
-  } else if (match(cx, TK_IF)) {
+    return s;
+  }
+
+  if (match(cx, TK_IF)) {
     s->ty = STMT_IF;
 
     consume(cx);
@@ -355,12 +364,35 @@ static AstStmt* parse_stmt(ParseContext* cx) {
       consume(cx);
       s->if_.else_ = parse_stmt(cx);
     }
-  } else {
-    // Anything else is an expression statement?
-    s->ty = STMT_EXPR;
-    s->expr = parse_expr(cx, PREC_MIN);
-    expect(cx, TK_SEMICOLON);
+    return s;
   }
+
+  if (match(cx, TK_GOTO)) {
+    consume(cx);
+    s->ty = STMT_GOTO;
+
+    Token t = expect(cx, TK_IDENT);
+    s->ident = t.content;
+
+    expect(cx, TK_SEMICOLON);
+    return s;
+  }
+
+  // TODO: what if this is the last token?
+  if (match(cx, TK_IDENT) && peek_ahead(cx, 1).ty == TK_COLON) {
+    Token t = consume(cx);
+    expect(cx, TK_COLON);
+
+    s->ty = STMT_LABELED;
+    s->labeled.label = t.content;
+    s->labeled.stmt = parse_stmt(cx);
+    return s;
+  }
+
+  // Anything else is an expression statement?
+  s->ty = STMT_EXPR;
+  s->expr = parse_expr(cx, PREC_MIN);
+  expect(cx, TK_SEMICOLON);
 
   return s;
 }

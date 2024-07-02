@@ -64,14 +64,18 @@ static inline IrInstruction binary(IrType ty, IrVal* r1, IrVal* r2,
   };
 }
 
-// Generates a unique label by appending an incrementing count to the label
-// name.
-static inline IrInstruction label(const char* label) {
-  static int n = 0;
+static inline IrInstruction label(String* name) {
   return (IrInstruction){
       .ty = IR_LABEL,
-      .label = string_format("%s_%d", label, n++),
+      .label = name,
   };
+}
+
+// Generates a unique label by appending an incrementing count to the label
+// name.
+static inline IrInstruction internal_label(const char* name) {
+  static int n = 0;
+  return label(string_format("%s_%d", name, n++));
 }
 
 static inline IrInstruction jmp(String* label) {
@@ -243,9 +247,9 @@ static IrVal* gen_assign(AstExpr* expr, Vec* out) {
 // This function arranges them with the appropriate jumps and puts them in
 // |out|. This assumes that |cond| has already been put into |out|.
 static void arrange_conditional(IrVal* cond, Vec* then, Vec* else_, Vec* out) {
-  IrInstruction else_label =
-      else_ ? label(".COND_ELSE") : label(".THIS_SHOULDNT_BE_HERE");
-  IrInstruction end_label = label(".COND_END");
+  IrInstruction else_label = else_ ? internal_label(".COND_ELSE")
+                                   : internal_label(".THIS_SHOULDNT_BE_HERE");
+  IrInstruction end_label = internal_label(".COND_END");
 
   push_inst(out,
             jmp_cnd(IR_JZ, cond, else_ ? else_label.label : end_label.label));
@@ -282,8 +286,8 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
     case EXPR_BINARY: {
       // AND and OR are special because they have to short circuit.
       if (expr->binary.op == BINARY_AND) {
-        IrInstruction false_label = label(".AND_FALSE");
-        IrInstruction end_label = label(".AND_END");
+        IrInstruction false_label = internal_label(".AND_FALSE");
+        IrInstruction end_label = internal_label(".AND_END");
 
         IrVal* result = temp();
 
@@ -316,8 +320,8 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
 
         return result;
       } else if (expr->binary.op == BINARY_OR) {
-        IrInstruction true_label = label(".OR_TRUE");
-        IrInstruction end_label = label(".OR_END");
+        IrInstruction true_label = internal_label(".OR_TRUE");
+        IrInstruction end_label = internal_label(".OR_END");
 
         IrVal* result = temp();
 
@@ -378,6 +382,14 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       return;
     case STMT_NULL:
       return;
+    case STMT_GOTO:
+      push_inst(out, jmp(stmt->ident));
+      return;
+    case STMT_LABELED: {
+      push_inst(out, label(stmt->labeled.label));
+      gen_statement(stmt->labeled.stmt, out);
+      return;
+    }
     case STMT_IF: {
       IrVal* cond = gen_expr(stmt->if_.cond, out);
 
