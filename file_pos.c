@@ -17,6 +17,11 @@ String* file_pos_current_line(const FilePos* pos) {
   return string_substring(pos->contents, pos->idx - pos->col, n + pos->col);
 }
 
+size_t file_pos_remaining(const FilePos* pos) {
+  assert(!file_pos_is_eof(pos));
+  return string_len(pos->contents) - pos->idx;
+}
+
 char file_pos_peek_char_at(const FilePos* pos, size_t n) {
   assert(!file_pos_is_eof(pos));
   return string_get(pos->contents, pos->idx + n);

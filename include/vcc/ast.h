@@ -4,11 +4,13 @@
 #include <vcc/string.h>
 #include <vcc/vec.h>
 
+typedef struct AstStmt AstStmt;
+typedef struct AstExpr AstExpr;
+
 //
 // AST expression definition
 //
 
-typedef struct AstExpr AstExpr;
 typedef enum {
   EXPR_BINARY,
   EXPR_UNARY,
@@ -79,6 +81,23 @@ struct AstExpr {
   };
 };
 
+typedef struct {
+  String* name;
+  AstExpr* init;
+} AstDecl;
+
+typedef struct {
+  enum {
+    BLOCK_STMT,
+    BLOCK_DECL,
+  } ty;
+
+  union {
+    AstDecl* decl;
+    AstStmt* stmt;
+  };
+} AstBlockItem;
+
 //
 // AST statement definition
 //
@@ -87,11 +106,10 @@ typedef enum {
   STMT_EXPR,
   STMT_IF,
   STMT_GOTO,
+  STMT_COMPOUND,
   STMT_LABELED,
   STMT_NULL,
 } AstStmtType;
-
-typedef struct AstStmt AstStmt;
 
 struct AstStmt {
   AstStmtType ty;
@@ -112,25 +130,12 @@ struct AstStmt {
 
     // STMT_GOTO
     String* ident;
+
+    // STMT_COMPOUND
+    // Vec<AstBlockItem>
+    Vec* block;
   };
 };
-
-typedef struct {
-  String* name;
-  AstExpr* init;
-} AstDecl;
-
-typedef struct {
-  enum {
-    BLOCK_STMT,
-    BLOCK_DECL,
-  } ty;
-
-  union {
-    AstDecl* decl;
-    AstStmt* stmt;
-  };
-} AstBlockItem;
 
 //
 // AST node definition

@@ -5,13 +5,20 @@
 #include <vcc/lex.h>
 
 //
+// Forward declarations
+//
+typedef struct ParseContext ParseContext;
+static AstDecl* parse_decl(ParseContext* cx);
+static AstStmt* parse_stmt(ParseContext* cx);
+
+//
 // Parsing Context definition
 //
 
 // This is basically an iterator through the token list.
 // Vec is essentially a stack and only supports pushing to/popping from the
 // back.
-typedef struct {
+struct ParseContext {
   const Vec* tokens;
   size_t idx;
   bool err;
@@ -20,7 +27,7 @@ typedef struct {
   bool do_variable_resolution;
   size_t var_count;
   Hashmap* var_map;  // Hashmap<String, String>
-} ParseContext;
+};
 
 // Peeks ahead n+1 tokens
 static Token peek_ahead(ParseContext* cx, size_t n) {
@@ -314,6 +321,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
     } else if (next.ty == TK_QUESTION) {
       // parse ternary
       // Question mark was already consumed
+
       AstExpr* then = parse_expr(cx, PREC_MIN);
       expect(cx, TK_COLON);
 
@@ -332,6 +340,31 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
     info = binary_info(next.ty);
   }
   return lhs;
+}
+
+static void parse_block_item(ParseContext* cx, Vec* out) {
+  AstBlockItem* b = vec_push_empty(out);
+  if (peek(cx).ty == TK_INT) {
+    b->ty = BLOCK_DECL;
+    b->decl = parse_decl(cx);
+  } else {
+    b->ty = BLOCK_STMT;
+    b->stmt = parse_stmt(cx);
+  }
+}
+
+// Returns Vec<AstBlockItem>.
+// Parsing includes consuming { and } tokens.
+static Vec* parse_block(ParseContext* cx) {
+  expect(cx, TK_OPEN_BRACE);
+
+  Vec* block = vec_new(sizeof(AstBlockItem));
+  while (peek(cx).ty != TK_CLOSE_BRACE) {
+    parse_block_item(cx, block);
+  }
+
+  expect(cx, TK_CLOSE_BRACE);
+  return block;
 }
 
 static AstStmt* parse_stmt(ParseContext* cx) {
@@ -375,6 +408,12 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     s->ident = t.content;
 
     expect(cx, TK_SEMICOLON);
+    return s;
+  }
+
+  if (match(cx, TK_OPEN_BRACE)) {
+    s->ty = STMT_COMPOUND;
+    s->block = parse_block(cx);
     return s;
   }
 
@@ -434,17 +473,6 @@ static AstDecl* parse_decl(ParseContext* cx) {
   return decl;
 }
 
-static void parse_block_item(ParseContext* cx, Vec* out) {
-  AstBlockItem* b = vec_push_empty(out);
-  if (peek(cx).ty == TK_INT) {
-    b->ty = BLOCK_DECL;
-    b->decl = parse_decl(cx);
-  } else {
-    b->ty = BLOCK_STMT;
-    b->stmt = parse_stmt(cx);
-  }
-}
-
 AstNode* parse_function(ParseContext* cx) {
   AstNode* fn = node(NODE_FN);
 
@@ -455,14 +483,8 @@ AstNode* parse_function(ParseContext* cx) {
   expect(cx, TK_OPEN_PAREN);
   expect(cx, TK_VOID);
   expect(cx, TK_CLOSE_PAREN);
-  expect(cx, TK_OPEN_BRACE);
 
-  fn->fn.body = vec_new(sizeof(AstBlockItem));
-  while (peek(cx).ty != TK_CLOSE_BRACE) {
-    parse_block_item(cx, fn->fn.body);
-  }
-
-  expect(cx, TK_CLOSE_BRACE);
+  fn->fn.body = parse_block(cx);
 
   return fn;
 }

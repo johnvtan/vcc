@@ -107,12 +107,28 @@ static void advance_position_by_token(FilePos* pos, const Token* t) {
 static bool match_keyword(const FilePos* pos, Token* out_token) {
   const char* curr = string_at(pos->contents, pos->idx);
   for (size_t i = 0; i < NUM_KEYWORDS; i++) {
-    if (string_begins2(curr, KEYWORD_MATCHES[i].match)) {
-      out_token->ty = KEYWORD_MATCHES[i].ty;
-      out_token->content = string_from(KEYWORD_MATCHES[i].match);
-      out_token->pos = *pos;
-      return true;
+    if (!string_begins2(curr, KEYWORD_MATCHES[i].match)) {
+      continue;
     }
+
+    // HACK: I check whether the keyword could be part of a larger ident
+    // by only checking if the first character of the keyword is a valid
+    // ident char. I don't think any keywords mix ident chars with non
+    // ident chars, but this could bite me in the future.
+    if (is_ident_char(KEYWORD_MATCHES[i].match[0])) {
+      // check character in curr after the keyword match to see if
+      // it's actually part of a larger ident.
+      size_t next_idx = strlen(KEYWORD_MATCHES[i].match);
+      if (file_pos_remaining(pos) > next_idx &&
+          is_ident_char(file_pos_peek_char_at(pos, next_idx))) {
+        return false;
+      }
+    }
+
+    out_token->ty = KEYWORD_MATCHES[i].ty;
+    out_token->content = string_from(KEYWORD_MATCHES[i].match);
+    out_token->pos = *pos;
+    return true;
   }
   return false;
 }

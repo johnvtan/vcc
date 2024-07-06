@@ -18,6 +18,7 @@ typedef struct {
 
 bool file_pos_is_eof(const FilePos* pos);
 String* file_pos_current_line(const FilePos* pos);
+size_t file_pos_remaining(const FilePos* pos);
 
 char file_pos_peek_char_at(const FilePos* pos, size_t n);
 char file_pos_peek_char(const FilePos* pos);
