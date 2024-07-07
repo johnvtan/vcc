@@ -3,6 +3,8 @@
 #include <vcc/errors.h>
 #include <vcc/ir.h>
 
+static void gen_block_item(AstBlockItem* block_item, Vec* out);
+
 //
 // Helpers for creating IrVal
 //
@@ -388,6 +390,12 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
     case STMT_LABELED: {
       push_inst(out, label(stmt->labeled.label));
       gen_statement(stmt->labeled.stmt, out);
+      return;
+    }
+    case STMT_COMPOUND: {
+      vec_for_each(stmt->block, AstBlockItem, block_item) {
+        gen_block_item(iter.block_item, out);
+      }
       return;
     }
     case STMT_IF: {
