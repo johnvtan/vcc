@@ -87,14 +87,13 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  AstProgram* prog = parse_ast(tokens, args.stage >= VALIDATE);
+  AstProgram* prog = parse_ast(tokens);
   if (!prog) {
     return -1;
   }
   if (args.stage == PARSE) {
     return 0;
   }
-
   if (args.stage == VALIDATE) {
     return 0;
   }

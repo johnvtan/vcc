@@ -30,8 +30,6 @@ struct ParseContext {
   size_t idx;
   bool err;
 
-  // For variable resolution
-  bool do_semantic_analysis;
   size_t var_count;
   VariableScope* scope;  // per block
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
@@ -93,7 +91,7 @@ static Token expect(ParseContext* cx, TokenType ty) {
 }
 
 static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
-  if (cx->do_semantic_analysis && val->ty != EXPR_VAR) {
+  if (val->ty != EXPR_VAR) {
     emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
     exit(-1);
   }
@@ -155,13 +153,8 @@ static AstExpr* parse_primary(ParseContext* cx) {
     Token t = consume(cx);
     String* unique_name = resolve_variable(cx, t.content);
     if (!unique_name) {
-      if (cx->do_semantic_analysis) {
-        emit_error_at(cx, "Undeclared variable: %s", cstring(t.content));
-        exit(-1);
-      } else {
-        // Hack to work around validate stage
-        unique_name = t.content;
-      }
+      emit_error_at(cx, "Undeclared variable: %s", cstring(t.content));
+      exit(-1);
     }
     AstExpr* e = expr(EXPR_VAR);
     e->ident = unique_name;
@@ -449,12 +442,10 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     Token t = consume(cx);
     expect(cx, TK_COLON);
 
-    if (cx->do_semantic_analysis) {
-      if (hashmap_get(cx->labels, t.content)) {
-        panic("Redeclared label %s", t.content);
-      }
-      hashmap_put(cx->labels, t.content, (void*)1);
+    if (hashmap_get(cx->labels, t.content)) {
+      panic("Redeclared label %s", t.content);
     }
+    hashmap_put(cx->labels, t.content, (void*)1);
 
     s->ty = STMT_LABELED;
     s->labeled.label = t.content;
@@ -475,23 +466,19 @@ static AstDecl* parse_decl(ParseContext* cx) {
   Token t = expect(cx, TK_IDENT);
   AstDecl* decl = calloc(1, sizeof(AstDecl));
 
-  if (cx->do_semantic_analysis) {
-    if (hashmap_get(cx->scope->map, t.content) != NULL) {
-      emit_error_at(cx, "Variable %s redefined", t.content);
-      exit(-1);
-    }
-
-    // Variable renaming ensures all variable names are unique
-    // Generated name should have a period to ensure they don't conflict
-    // with user identifiers.
-    String* unique_var_name =
-        string_format("%s.%u", cstring(t.content), cx->var_count++);
-
-    hashmap_put(cx->scope->map, t.content, unique_var_name);
-    decl->name = unique_var_name;
-  } else {
-    decl->name = t.content;
+  if (hashmap_get(cx->scope->map, t.content) != NULL) {
+    emit_error_at(cx, "Variable %s redefined", t.content);
+    exit(-1);
   }
+
+  // Variable renaming ensures all variable names are unique
+  // Generated name should have a period to ensure they don't conflict
+  // with user identifiers.
+  String* unique_var_name =
+      string_format("%s.%u", cstring(t.content), cx->var_count++);
+
+  hashmap_put(cx->scope->map, t.content, unique_var_name);
+  decl->name = unique_var_name;
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
@@ -524,26 +511,24 @@ AstNode* parse_function(ParseContext* cx) {
 
   fn->fn.body = parse_block(cx);
 
-  if (cx->do_semantic_analysis) {
-    // check all goto statements point to a valid label
-    vec_for_each(fn->fn.body, AstBlockItem, block_item) {
-      if (iter.block_item->ty != BLOCK_STMT) {
-        continue;
-      }
-      AstStmt* stmt = iter.block_item->stmt;
-      if (stmt->ty != STMT_GOTO) {
-        continue;
-      }
-      if (hashmap_get(cx->labels, stmt->ident) == NULL) {
-        panic("Goto to undeclared label %s", stmt->ident);
-      }
+  // check all goto statements point to a valid label
+  vec_for_each(fn->fn.body, AstBlockItem, block_item) {
+    if (iter.block_item->ty != BLOCK_STMT) {
+      continue;
+    }
+    AstStmt* stmt = iter.block_item->stmt;
+    if (stmt->ty != STMT_GOTO) {
+      continue;
+    }
+    if (hashmap_get(cx->labels, stmt->ident) == NULL) {
+      panic("Goto to undeclared label %s", stmt->ident);
     }
   }
 
   return fn;
 }
 
-AstProgram* parse_ast(Vec* tokens, bool do_semantic_analysis) {
+AstProgram* parse_ast(Vec* tokens) {
   VariableScope global_scope = {
       .map = hashmap_new(),
       .parent = NULL,
@@ -552,7 +537,6 @@ AstProgram* parse_ast(Vec* tokens, bool do_semantic_analysis) {
       .tokens = tokens,
       .idx = 0,
       .err = false,
-      .do_semantic_analysis = do_semantic_analysis,
       .var_count = 0,
       .scope = &global_scope,
   };
