@@ -108,6 +108,9 @@ typedef enum {
   STMT_GOTO,
   STMT_COMPOUND,
   STMT_LABELED,
+  STMT_FOR,
+  STMT_WHILE,
+  STMT_DOWHILE,
   STMT_NULL,
 } AstStmtType;
 
@@ -134,6 +137,36 @@ struct AstStmt {
     // STMT_COMPOUND
     // Vec<AstBlockItem>
     Vec* block;
+
+    // STMT_FOR
+    struct {
+      struct {
+        enum {
+          FOR_INIT_DECL,
+          FOR_INIT_EXPR,
+        } ty;
+        union {
+          AstDecl* decl;
+          AstExpr* expr;
+        };
+      } init;
+
+      AstExpr* cond;
+      AstExpr* post;
+      AstStmt* body;
+
+      String* continue_label;
+      String* break_label;
+    } for_;
+
+    // STMT_WHILE/STMT_DOWHILE
+    struct {
+      AstExpr* cond;
+      AstStmt* body;
+
+      String* continue_label;
+      String* break_label;
+    } while_;
   };
 };
 

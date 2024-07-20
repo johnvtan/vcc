@@ -22,6 +22,28 @@ struct VariableScope {
   VariableScope* parent;
 };
 
+typedef struct LoopLabels LoopLabels;
+struct LoopLabels {
+  String* continue_label;
+  String* break_label;
+
+  LoopLabels* parent;
+};
+
+// Generates a unique break/continue label for the given loop.
+// Break/continue don't exist in the AST -- they're all rewritten
+// as goto statements.
+LoopLabels new_loop_labels(LoopLabels* parent, const char* loop_type) {
+  static int count = 0;
+  LoopLabels ret = {
+      .parent = parent,
+      .continue_label = string_format(".AST.%s.CONTINUE.%d", loop_type, count),
+      .break_label = string_format(".AST.%s.BREAK.%d", loop_type, count),
+  };
+  count++;
+  return ret;
+}
+
 // This is basically an iterator through the token list.
 // Vec is essentially a stack and only supports pushing to/popping from the
 // back.
@@ -31,7 +53,8 @@ struct ParseContext {
   bool err;
 
   size_t var_count;
-  VariableScope* scope;  // per block
+  VariableScope* scope;     // per block
+  LoopLabels* loop_labels;  // per loop
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
 };
 
@@ -360,6 +383,7 @@ static void parse_block_item(ParseContext* cx, Vec* out) {
   if (peek(cx).ty == TK_INT) {
     b->ty = BLOCK_DECL;
     b->decl = parse_decl(cx);
+    expect(cx, TK_SEMICOLON);
   } else {
     b->ty = BLOCK_STMT;
     b->stmt = parse_stmt(cx);
@@ -437,6 +461,134 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     return s;
   }
 
+  if (match(cx, TK_BREAK)) {
+    consume(cx);
+    if (!cx->loop_labels) {
+      panic("In break but no loop labels %d", 1);
+    }
+
+    // Break is rewritten as a goto to the break_label.
+    // Note that the break_label doesn't exist in the AST.
+    // We'll insert the appropriate label in IR generation.
+    s->ty = STMT_GOTO;
+    s->ident = cx->loop_labels->break_label;
+    expect(cx, TK_SEMICOLON);
+    return s;
+  }
+
+  if (match(cx, TK_CONTINUE)) {
+    consume(cx);
+    if (!cx->loop_labels) {
+      panic("In continue but no loop labels %d", 1);
+    }
+
+    // Continue is rewritten as a goto to the break_label.
+    // Note that the break_label doesn't exist in the AST.
+    // We'll insert the appropriate label in IR generation.
+    s->ty = STMT_GOTO;
+    s->ident = cx->loop_labels->continue_label;
+    expect(cx, TK_SEMICOLON);
+    return s;
+  }
+
+  if (match(cx, TK_WHILE)) {
+    consume(cx);
+    s->ty = STMT_WHILE;
+
+    LoopLabels ll = new_loop_labels(cx->loop_labels, "WHILE");
+    cx->loop_labels = &ll;
+
+    expect(cx, TK_OPEN_PAREN);
+    s->while_.cond = parse_expr(cx, PREC_MIN);
+    expect(cx, TK_CLOSE_PAREN);
+    s->while_.body = parse_stmt(cx);
+
+    s->while_.break_label = ll.break_label;
+    s->while_.continue_label = ll.continue_label;
+    assert(cx->loop_labels);
+    cx->loop_labels = cx->loop_labels->parent;
+    return s;
+  }
+
+  if (match(cx, TK_DO)) {
+    consume(cx);
+    s->ty = STMT_DOWHILE;
+
+    LoopLabels ll = new_loop_labels(cx->loop_labels, "DOWHILE");
+    cx->loop_labels = &ll;
+
+    s->while_.body = parse_stmt(cx);
+
+    expect(cx, TK_WHILE);
+    expect(cx, TK_OPEN_PAREN);
+    s->while_.cond = parse_expr(cx, PREC_MIN);
+    expect(cx, TK_CLOSE_PAREN);
+    expect(cx, TK_SEMICOLON);
+
+    s->while_.break_label = ll.break_label;
+    s->while_.continue_label = ll.continue_label;
+    assert(cx->loop_labels);
+    cx->loop_labels = cx->loop_labels->parent;
+    return s;
+  }
+
+  if (match(cx, TK_FOR)) {
+    consume(cx);
+    s->ty = STMT_FOR;
+
+    // for stmt gets new scope
+    VariableScope scope = {
+        .map = hashmap_new(),
+        .parent = cx->scope,
+    };
+    cx->scope = &scope;
+
+    LoopLabels ll = new_loop_labels(cx->loop_labels, "FOR");
+    cx->loop_labels = &ll;
+
+    expect(cx, TK_OPEN_PAREN);
+
+    emit_error_no_pos("for-init");
+    if (match(cx, TK_INT)) {
+      emit_error_no_pos("\tfor-init: decl");
+      s->for_.init.ty = FOR_INIT_DECL;
+      s->for_.init.decl = parse_decl(cx);
+    } else if (!match(cx, TK_SEMICOLON)) {
+      emit_error_no_pos("\tfor-init: expr");
+      s->for_.init.ty = FOR_INIT_EXPR;
+      s->for_.init.expr = parse_expr(cx, PREC_MIN);
+    }
+    expect(cx, TK_SEMICOLON);
+
+    emit_error_no_pos("for-cond");
+    if (!match(cx, TK_SEMICOLON)) {
+      s->for_.cond = parse_expr(cx, PREC_MIN);
+    } else {
+      // If the cond is omitted then we insert a 1 so the
+      // loop continues forever.
+      s->for_.cond = expr(EXPR_INT_CONST);
+      s->for_.cond->int_const = 1;
+    }
+    expect(cx, TK_SEMICOLON);
+
+    emit_error_no_pos("for-post");
+    if (!match(cx, TK_CLOSE_PAREN)) {
+      s->for_.post = parse_expr(cx, PREC_MIN);
+    }
+    expect(cx, TK_CLOSE_PAREN);
+    emit_error_no_pos("for-body");
+
+    s->for_.body = parse_stmt(cx);
+
+    s->for_.break_label = ll.break_label;
+    s->for_.continue_label = ll.continue_label;
+
+    assert(cx->loop_labels);
+    cx->loop_labels = cx->loop_labels->parent;
+    cx->scope = cx->scope->parent;
+    return s;
+  }
+
   // TODO: what if this is the last token?
   if (match(cx, TK_IDENT) && peek_ahead(cx, 1).ty == TK_COLON) {
     Token t = consume(cx);
@@ -492,7 +644,6 @@ static AstDecl* parse_decl(ParseContext* cx) {
     decl->init = expr_binary(BINARY_ASSIGN, var, init_expr);
   }
 
-  expect(cx, TK_SEMICOLON);
   return decl;
 }
 
@@ -539,6 +690,7 @@ AstProgram* parse_ast(Vec* tokens) {
       .err = false,
       .var_count = 0,
       .scope = &global_scope,
+      .loop_labels = NULL,
   };
 
   AstProgram* prog = calloc(1, sizeof(AstProgram));

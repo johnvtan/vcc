@@ -44,6 +44,11 @@ typedef enum {
   TK_QUESTION,
   TK_COLON,
   TK_GOTO,
+  TK_DO,
+  TK_WHILE,
+  TK_FOR,
+  TK_BREAK,
+  TK_CONTINUE,
 
   TK_IDENT,
   TK_NUM_CONST,

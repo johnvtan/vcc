@@ -77,7 +77,7 @@ static inline IrInstruction label(String* name) {
 // name.
 static inline IrInstruction internal_label(const char* name) {
   static int n = 0;
-  return label(string_format("%s_%d", name, n++));
+  return label(string_format(".IR_%s_%d", name, n++));
 }
 
 static inline IrInstruction jmp(String* label) {
