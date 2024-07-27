@@ -548,35 +548,24 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     expect(cx, TK_OPEN_PAREN);
 
-    emit_error_no_pos("for-init");
     if (match(cx, TK_INT)) {
-      emit_error_no_pos("\tfor-init: decl");
       s->for_.init.ty = FOR_INIT_DECL;
       s->for_.init.decl = parse_decl(cx);
     } else if (!match(cx, TK_SEMICOLON)) {
-      emit_error_no_pos("\tfor-init: expr");
       s->for_.init.ty = FOR_INIT_EXPR;
       s->for_.init.expr = parse_expr(cx, PREC_MIN);
     }
     expect(cx, TK_SEMICOLON);
 
-    emit_error_no_pos("for-cond");
     if (!match(cx, TK_SEMICOLON)) {
       s->for_.cond = parse_expr(cx, PREC_MIN);
-    } else {
-      // If the cond is omitted then we insert a 1 so the
-      // loop continues forever.
-      s->for_.cond = expr(EXPR_INT_CONST);
-      s->for_.cond->int_const = 1;
     }
     expect(cx, TK_SEMICOLON);
 
-    emit_error_no_pos("for-post");
     if (!match(cx, TK_CLOSE_PAREN)) {
       s->for_.post = parse_expr(cx, PREC_MIN);
     }
     expect(cx, TK_CLOSE_PAREN);
-    emit_error_no_pos("for-body");
 
     s->for_.body = parse_stmt(cx);
 

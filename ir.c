@@ -4,6 +4,7 @@
 #include <vcc/ir.h>
 
 static void gen_block_item(AstBlockItem* block_item, Vec* out);
+static void gen_decl(AstDecl* decl, Vec* out);
 
 //
 // Helpers for creating IrVal
@@ -411,6 +412,75 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       }
 
       arrange_conditional(cond, then_ir, else_ir, out);
+      return;
+    }
+    case STMT_WHILE: {
+      // .CONTINUE_LABEL:
+      // tmp = <instructions for cond>
+      // jz tmp, .BREAK_LABEL
+      // <instructions for body>
+      // jmp .CONTINUE_LABEL
+      // .BREAK_LABEL:
+      push_inst(out, label(stmt->while_.continue_label));
+      IrVal* cond = gen_expr(stmt->while_.cond, out);
+      push_inst(out, jmp_cnd(IR_JZ, cond, stmt->while_.break_label));
+      gen_statement(stmt->while_.body, out);
+      push_inst(out, jmp(stmt->while_.continue_label));
+      push_inst(out, label(stmt->while_.break_label));
+      return;
+    }
+    case STMT_DOWHILE: {
+      // .DOWHILE.START:
+      // <instructions for body>
+      // .CONTINUE_LABEL:
+      // tmp = <instructions for cond>
+      // jnz tmp, .DOWHILE.START
+      // .BREAK_LABEL:
+      IrInstruction start = internal_label(".DOWHILE.START");
+      push_inst(out, start);
+
+      gen_statement(stmt->while_.body, out);
+      push_inst(out, label(stmt->while_.continue_label));
+      IrVal* cond = gen_expr(stmt->while_.cond, out);
+      push_inst(out, jmp_cnd(IR_JNZ, cond, start.label));
+      push_inst(out, label(stmt->while_.break_label));
+      return;
+    }
+    case STMT_FOR: {
+      // <instructions for init>
+      // .FOR.START:
+      // tmp = <instructions for cond>
+      // jz tmp, .BREAK_LABEL
+      // <instructions for body>
+      // .CONTINUE_LABEL:
+      // <instructions for post>
+      // jmp .FOR.START
+      // .BREAK_LABEL:
+
+      // This is a union; just checking that an init exists.
+      if (stmt->for_.init.decl) {
+        if (stmt->for_.init.ty == FOR_INIT_DECL) {
+          gen_decl(stmt->for_.init.decl, out);
+        } else {
+          gen_expr(stmt->for_.init.expr, out);
+        }
+      }
+
+      IrInstruction start = internal_label(".FOR.START");
+      push_inst(out, start);
+
+      if (stmt->for_.cond) {
+        IrVal* cond = gen_expr(stmt->for_.cond, out);
+        push_inst(out, jmp_cnd(IR_JZ, cond, stmt->for_.break_label));
+      }
+
+      gen_statement(stmt->for_.body, out);
+      push_inst(out, label(stmt->for_.continue_label));
+      if (stmt->for_.post) {
+        gen_expr(stmt->for_.post, out);
+      }
+      push_inst(out, jmp(start.label));
+      push_inst(out, label(stmt->for_.break_label));
       return;
     }
     default:
