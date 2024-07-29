@@ -63,6 +63,7 @@ void vec_push(Vec* vec, void* item) {
 
 void vec_pop(Vec* vec) {
   assert(vec && vec->data && vec->len);
+  memset(vec_back(vec), 0, vec->item_size);
   vec->len--;
 }
 

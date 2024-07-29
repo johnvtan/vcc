@@ -49,6 +49,9 @@ typedef enum {
   TK_FOR,
   TK_BREAK,
   TK_CONTINUE,
+  TK_SWITCH,
+  TK_CASE,
+  TK_DEFAULT,
 
   TK_IDENT,
   TK_NUM_CONST,

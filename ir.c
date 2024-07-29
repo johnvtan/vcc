@@ -483,6 +483,36 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       push_inst(out, label(stmt->for_.break_label));
       return;
     }
+    case STMT_SWITCH: {
+      IrVal* cond = gen_expr(stmt->switch_.cond, out);
+      IrVal* cmp_result = temp();
+
+      AstCaseJump* default_case = NULL;
+      vec_for_each(stmt->switch_.case_jumps, AstCaseJump, case_jump) {
+        if (iter.case_jump->is_default) {
+          default_case = iter.case_jump;
+          continue;
+        }
+        // if stmt->switch_.cond == iter.case_jump->const_expr:
+        //   jmp iter.case_jump->label.
+        int const_val = iter.case_jump->const_expr->int_const;
+        push_inst(out, binary(IR_EQ, cond, constant(const_val), cmp_result));
+        push_inst(out, jmp_cnd(IR_JNZ, cmp_result, iter.case_jump->label));
+      }
+
+      if (default_case) {
+        // no condition for default: jump to default
+        // jmp default_case->label
+        push_inst(out, jmp(default_case->label));
+      } else {
+        // No default case -- just skip the body
+        push_inst(out, jmp(stmt->switch_.break_label));
+      }
+
+      gen_statement(stmt->switch_.body, out);
+      push_inst(out, label(stmt->switch_.break_label));
+      return;
+    }
     default:
       panic("Unexpected AstStmt type: %lu", stmt->ty);
   }

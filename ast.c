@@ -22,28 +22,6 @@ struct VariableScope {
   VariableScope* parent;
 };
 
-typedef struct LoopLabels LoopLabels;
-struct LoopLabels {
-  String* continue_label;
-  String* break_label;
-
-  LoopLabels* parent;
-};
-
-// Generates a unique break/continue label for the given loop.
-// Break/continue don't exist in the AST -- they're all rewritten
-// as goto statements.
-LoopLabels new_loop_labels(LoopLabels* parent, const char* loop_type) {
-  static int count = 0;
-  LoopLabels ret = {
-      .parent = parent,
-      .continue_label = string_format(".AST.%s.CONTINUE.%d", loop_type, count),
-      .break_label = string_format(".AST.%s.BREAK.%d", loop_type, count),
-  };
-  count++;
-  return ret;
-}
-
 // This is basically an iterator through the token list.
 // Vec is essentially a stack and only supports pushing to/popping from the
 // back.
@@ -53,9 +31,24 @@ struct ParseContext {
   bool err;
 
   size_t var_count;
-  VariableScope* scope;     // per block
-  LoopLabels* loop_labels;  // per loop
+  VariableScope* scope;  // per block
+
+  // defined labels
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
+
+  // labels that goto points to
+  // We compare gone_to_labels to labels at the end of each function to see
+  // that each goto points to a valid label
+  Vec* gone_to_labels;
+
+  // Used for parsing break/continue/case statements
+  size_t internal_label_count;
+
+  // To avoid copies, these are all vectors of pointers
+  Vec* break_stack;     // Vec<String*>
+  Vec* continue_stack;  // Vec<String*>
+  Vec* case_stack;  // Vec<Vec<AstCaseJump>*> --> collects case statements per
+                    // switch is a stack for nested switch statements.
 };
 
 static String* resolve_variable(ParseContext* cx, String* ident) {
@@ -450,6 +443,7 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     Token t = expect(cx, TK_IDENT);
     s->ident = t.content;
+    vec_push(cx->gone_to_labels, s->ident);
 
     expect(cx, TK_SEMICOLON);
     return s;
@@ -463,31 +457,105 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
   if (match(cx, TK_BREAK)) {
     consume(cx);
-    if (!cx->loop_labels) {
-      panic("In break but no loop labels %d", 1);
+    if (cx->break_stack->len == 0) {
+      panic("In break but no break label %d", 1);
     }
 
     // Break is rewritten as a goto to the break_label.
     // Note that the break_label doesn't exist in the AST.
     // We'll insert the appropriate label in IR generation.
     s->ty = STMT_GOTO;
-    s->ident = cx->loop_labels->break_label;
+    s->ident = *(String**)vec_back(cx->break_stack);
     expect(cx, TK_SEMICOLON);
     return s;
   }
 
   if (match(cx, TK_CONTINUE)) {
     consume(cx);
-    if (!cx->loop_labels) {
-      panic("In continue but no loop labels %d", 1);
+    if (cx->continue_stack->len == 0) {
+      panic("In continue but no continue labels %d", 1);
     }
 
     // Continue is rewritten as a goto to the break_label.
     // Note that the break_label doesn't exist in the AST.
     // We'll insert the appropriate label in IR generation.
     s->ty = STMT_GOTO;
-    s->ident = cx->loop_labels->continue_label;
+    s->ident = *(String**)vec_back(cx->continue_stack);
     expect(cx, TK_SEMICOLON);
+    return s;
+  }
+
+  if (match(cx, TK_SWITCH)) {
+    consume(cx);
+    s->ty = STMT_SWITCH;
+
+    s->switch_.break_label =
+        string_format(".AST.SWITCH.BREAK.%d", cx->internal_label_count);
+    s->switch_.case_jumps = vec_new(sizeof(AstCaseJump));
+    cx->internal_label_count++;
+
+    vec_push(cx->break_stack, &s->while_.break_label);
+    vec_push(cx->case_stack, &s->switch_.case_jumps);
+
+    expect(cx, TK_OPEN_PAREN);
+    s->switch_.cond = parse_expr(cx, PREC_MIN);
+    expect(cx, TK_CLOSE_PAREN);
+
+    s->switch_.body = parse_stmt(cx);
+
+    vec_pop(cx->break_stack);
+    vec_pop(cx->case_stack);
+
+    // Verify cases (e.g., no duplicates).
+    Hashmap* case_conds = hashmap_new();
+    bool has_default = false;
+    vec_for_each(s->switch_.case_jumps, AstCaseJump, case_) {
+      if (iter.case_->is_default) {
+        if (has_default) {
+          panic("Found duplicate default in switch statement", 1);
+        }
+        has_default = true;
+        continue;
+      }
+
+      String* stringified_cond =
+          string_format("%d", iter.case_->const_expr->int_const);
+      if (hashmap_get(case_conds, stringified_cond) != NULL) {
+        panic("Found duplicate cond in switch statement", 1);
+      }
+
+      hashmap_put(case_conds, stringified_cond, (void*)1);
+    }
+
+    return s;
+  }
+
+  if (match(cx, TK_CASE) || match(cx, TK_DEFAULT)) {
+    if (cx->case_stack->len == 0) {
+      panic("Not in switch statement", 1);
+    }
+
+    // Under the hood case/default are labeled statements
+    s->ty = STMT_LABELED;
+    s->labeled.label =
+        string_format(".AST.SWITCH.TARGET.%d", cx->internal_label_count++);
+
+    // Update case jumps in switch statement
+    Vec** case_stack = vec_back(cx->case_stack);
+    AstCaseJump* case_jump = vec_push_empty(*case_stack);
+    case_jump->is_default = consume(cx).ty == TK_DEFAULT;
+    if (!case_jump->is_default) {
+      case_jump->const_expr = parse_primary(cx);
+      if (case_jump->const_expr->ty != EXPR_INT_CONST) {
+        panic("Expected constant expression in case but got %d",
+              case_jump->const_expr->ty);
+      }
+    }
+    case_jump->label = string_copy(s->labeled.label);
+
+    expect(cx, TK_COLON);
+
+    s->labeled.stmt = parse_stmt(cx);
     return s;
   }
 
@@ -495,18 +563,22 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     consume(cx);
     s->ty = STMT_WHILE;
 
-    LoopLabels ll = new_loop_labels(cx->loop_labels, "WHILE");
-    cx->loop_labels = &ll;
+    s->while_.break_label =
+        string_format(".AST.WHILE.BREAK.%d", cx->internal_label_count);
+    s->while_.continue_label =
+        string_format(".AST.WHILE.CONTINUE.%d", cx->internal_label_count);
+    cx->internal_label_count++;
+
+    vec_push(cx->break_stack, &s->while_.break_label);
+    vec_push(cx->continue_stack, &s->while_.continue_label);
 
     expect(cx, TK_OPEN_PAREN);
     s->while_.cond = parse_expr(cx, PREC_MIN);
     expect(cx, TK_CLOSE_PAREN);
     s->while_.body = parse_stmt(cx);
 
-    s->while_.break_label = ll.break_label;
-    s->while_.continue_label = ll.continue_label;
-    assert(cx->loop_labels);
-    cx->loop_labels = cx->loop_labels->parent;
+    vec_pop(cx->break_stack);
+    vec_pop(cx->continue_stack);
     return s;
   }
 
@@ -514,8 +586,14 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     consume(cx);
     s->ty = STMT_DOWHILE;
 
-    LoopLabels ll = new_loop_labels(cx->loop_labels, "DOWHILE");
-    cx->loop_labels = &ll;
+    s->while_.break_label =
+        string_format(".AST.DOWHILE.BREAK.%d", cx->internal_label_count);
+    s->while_.continue_label =
+        string_format(".AST.DOWHILE.CONTINUE.%d", cx->internal_label_count);
+    cx->internal_label_count++;
+
+    vec_push(cx->break_stack, &s->while_.break_label);
+    vec_push(cx->continue_stack, &s->while_.continue_label);
 
     s->while_.body = parse_stmt(cx);
 
@@ -525,10 +603,8 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     expect(cx, TK_CLOSE_PAREN);
     expect(cx, TK_SEMICOLON);
 
-    s->while_.break_label = ll.break_label;
-    s->while_.continue_label = ll.continue_label;
-    assert(cx->loop_labels);
-    cx->loop_labels = cx->loop_labels->parent;
+    vec_pop(cx->break_stack);
+    vec_pop(cx->continue_stack);
     return s;
   }
 
@@ -543,8 +619,14 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     };
     cx->scope = &scope;
 
-    LoopLabels ll = new_loop_labels(cx->loop_labels, "FOR");
-    cx->loop_labels = &ll;
+    s->for_.break_label =
+        string_format(".AST.FOR.BREAK.%d", cx->internal_label_count);
+    s->for_.continue_label =
+        string_format(".AST.FOR.CONTINUE.%d", cx->internal_label_count);
+    cx->internal_label_count++;
+
+    vec_push(cx->break_stack, &s->for_.break_label);
+    vec_push(cx->continue_stack, &s->for_.continue_label);
 
     expect(cx, TK_OPEN_PAREN);
 
@@ -569,11 +651,8 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     s->for_.body = parse_stmt(cx);
 
-    s->for_.break_label = ll.break_label;
-    s->for_.continue_label = ll.continue_label;
-
-    assert(cx->loop_labels);
-    cx->loop_labels = cx->loop_labels->parent;
+    vec_pop(cx->break_stack);
+    vec_pop(cx->continue_stack);
     cx->scope = cx->scope->parent;
     return s;
   }
@@ -604,12 +683,16 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
 static AstDecl* parse_decl(ParseContext* cx) {
   expect(cx, TK_INT);
+  if (!cx->scope->map) {
+    // this means that declarations aren't allowed in the current context (e.g.,
+    // switch statement)
+    panic("Declaration found in disallowed context", 1);
+  }
   Token t = expect(cx, TK_IDENT);
   AstDecl* decl = calloc(1, sizeof(AstDecl));
 
   if (hashmap_get(cx->scope->map, t.content) != NULL) {
-    emit_error_at(cx, "Variable %s redefined", t.content);
-    exit(-1);
+    panic("Variable %s redefined", t.content);
   }
 
   // Variable renaming ensures all variable names are unique
@@ -638,6 +721,7 @@ static AstDecl* parse_decl(ParseContext* cx) {
 
 AstNode* parse_function(ParseContext* cx) {
   cx->labels = hashmap_new();
+  cx->gone_to_labels = vec_new(sizeof(String));
 
   AstNode* fn = node(NODE_FN);
 
@@ -652,19 +736,11 @@ AstNode* parse_function(ParseContext* cx) {
   fn->fn.body = parse_block(cx);
 
   // check all goto statements point to a valid label
-  vec_for_each(fn->fn.body, AstBlockItem, block_item) {
-    if (iter.block_item->ty != BLOCK_STMT) {
-      continue;
-    }
-    AstStmt* stmt = iter.block_item->stmt;
-    if (stmt->ty != STMT_GOTO) {
-      continue;
-    }
-    if (hashmap_get(cx->labels, stmt->ident) == NULL) {
-      panic("Goto to undeclared label %s", stmt->ident);
+  vec_for_each(cx->gone_to_labels, String, label) {
+    if (hashmap_get(cx->labels, iter.label) == NULL) {
+      panic("Goto to undeclared label %s", iter.label);
     }
   }
-
   return fn;
 }
 
@@ -679,7 +755,10 @@ AstProgram* parse_ast(Vec* tokens) {
       .err = false,
       .var_count = 0,
       .scope = &global_scope,
-      .loop_labels = NULL,
+      .internal_label_count = 0,
+      .break_stack = vec_new(sizeof(String*)),
+      .continue_stack = vec_new(sizeof(String*)),
+      .case_stack = vec_new(sizeof(Vec*)),
   };
 
   AstProgram* prog = calloc(1, sizeof(AstProgram));

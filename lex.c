@@ -54,6 +54,9 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_FOR, "for"},
     {TK_BREAK, "break"},
     {TK_CONTINUE, "continue"},
+    {TK_SWITCH, "switch"},
+    {TK_CASE, "case"},
+    {TK_DEFAULT, "default"},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))

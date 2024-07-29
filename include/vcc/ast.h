@@ -98,6 +98,12 @@ typedef struct {
   };
 } AstBlockItem;
 
+typedef struct {
+  AstExpr* const_expr;
+  bool is_default;
+  String* label;
+} AstCaseJump;
+
 //
 // AST statement definition
 //
@@ -111,6 +117,7 @@ typedef enum {
   STMT_FOR,
   STMT_WHILE,
   STMT_DOWHILE,
+  STMT_SWITCH,
   STMT_NULL,
 } AstStmtType;
 
@@ -167,6 +174,18 @@ struct AstStmt {
       String* continue_label;
       String* break_label;
     } while_;
+
+    struct {
+      // cond must evaluate to an integer
+      AstExpr* cond;
+
+      // Case statements are only allowed in here.
+      AstStmt* body;
+
+      // Vec<AstCaseJmp>. Case statements are just labeled statements.
+      Vec* case_jumps;
+      String* break_label;  // no continue in switch statement.
+    } switch_;
   };
 };
 
