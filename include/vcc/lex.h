@@ -52,6 +52,7 @@ typedef enum {
   TK_SWITCH,
   TK_CASE,
   TK_DEFAULT,
+  TK_COMMA,
 
   TK_IDENT,
   TK_NUM_CONST,

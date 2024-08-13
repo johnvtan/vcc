@@ -51,6 +51,10 @@ struct ParseContext {
                     // switch is a stack for nested switch statements.
 };
 
+static inline bool at_top_level(ParseContext* cx) {
+  return cx->scope->parent == NULL;
+}
+
 static String* resolve_variable(ParseContext* cx, String* ident) {
   for (VariableScope* scope = cx->scope; scope; scope = scope->parent) {
     String* name = hashmap_get(scope->map, ident);
@@ -118,12 +122,6 @@ static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
 //
 
 static AstExpr* parse_expr(ParseContext* cx, int min_prec);
-
-static AstNode* node(AstNodeType ty) {
-  AstNode* n = calloc(1, sizeof(AstNode));
-  n->ty = ty;
-  return n;
-}
 
 static AstExpr* expr(AstExprType ty) {
   AstExpr* e = calloc(1, sizeof(AstExpr));
@@ -683,65 +681,57 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
 static AstDecl* parse_decl(ParseContext* cx) {
   expect(cx, TK_INT);
-  if (!cx->scope->map) {
-    // this means that declarations aren't allowed in the current context (e.g.,
-    // switch statement)
-    panic("Declaration found in disallowed context", 1);
-  }
   Token t = expect(cx, TK_IDENT);
   AstDecl* decl = calloc(1, sizeof(AstDecl));
 
-  if (hashmap_get(cx->scope->map, t.content) != NULL) {
-    panic("Variable %s redefined", t.content);
-  }
+  if (match(cx, TK_OPEN_PAREN)) {
+    decl->ty = AST_DECL_FN;
+    cx->labels = hashmap_new();
+    cx->gone_to_labels = vec_new(sizeof(String));
 
-  // Variable renaming ensures all variable names are unique
-  // Generated name should have a period to ensure they don't conflict
-  // with user identifiers.
-  String* unique_var_name =
-      string_format("%s.%u", cstring(t.content), cx->var_count++);
+    decl->fn.name = t.content;
 
-  hashmap_put(cx->scope->map, t.content, unique_var_name);
-  decl->name = unique_var_name;
+    expect(cx, TK_OPEN_PAREN);
+    expect(cx, TK_VOID);
+    expect(cx, TK_CLOSE_PAREN);
 
-  if (peek(cx).ty == TK_EQ) {
-    consume(cx);
+    decl->fn.body = parse_block(cx);
 
-    // Under the hood, init expressions are rewritten to be
-    // an assign expr.
-    AstExpr* init_expr = parse_expr(cx, PREC_MIN);
-    AstExpr* var = expr(EXPR_VAR);
-    var->ident = decl->name;
+    // check all goto statements point to a valid label
+    vec_for_each(cx->gone_to_labels, String, label) {
+      if (hashmap_get(cx->labels, iter.label) == NULL) {
+        panic("Goto to undeclared label %s", iter.label);
+      }
+    }
+  } else {
+    if (hashmap_get(cx->scope->map, t.content) != NULL) {
+      panic("Variable %s redefined", t.content);
+    }
 
-    decl->init = expr_binary(BINARY_ASSIGN, var, init_expr);
+    // Variable renaming ensures all variable names are unique
+    // Generated name should have a period to ensure they don't conflict
+    // with user identifiers.
+    String* unique_var_name =
+        string_format("%s.%u", cstring(t.content), cx->var_count++);
+
+    hashmap_put(cx->scope->map, t.content, unique_var_name);
+    decl->ty = AST_DECL_VAR;
+    decl->var.name = unique_var_name;
+
+    if (peek(cx).ty == TK_EQ) {
+      consume(cx);
+
+      // Under the hood, init expressions are rewritten to be
+      // an assign expr.
+      AstExpr* init_expr = parse_expr(cx, PREC_MIN);
+      AstExpr* var = expr(EXPR_VAR);
+      var->ident = decl->var.name;
+
+      decl->var.init = expr_binary(BINARY_ASSIGN, var, init_expr);
+    }
   }
 
   return decl;
-}
-
-AstNode* parse_function(ParseContext* cx) {
-  cx->labels = hashmap_new();
-  cx->gone_to_labels = vec_new(sizeof(String));
-
-  AstNode* fn = node(NODE_FN);
-
-  expect(cx, TK_INT);
-  Token name = expect(cx, TK_IDENT);
-  fn->fn.name = name.content;
-
-  expect(cx, TK_OPEN_PAREN);
-  expect(cx, TK_VOID);
-  expect(cx, TK_CLOSE_PAREN);
-
-  fn->fn.body = parse_block(cx);
-
-  // check all goto statements point to a valid label
-  vec_for_each(cx->gone_to_labels, String, label) {
-    if (hashmap_get(cx->labels, iter.label) == NULL) {
-      panic("Goto to undeclared label %s", iter.label);
-    }
-  }
-  return fn;
 }
 
 AstProgram* parse_ast(Vec* tokens) {
@@ -762,12 +752,14 @@ AstProgram* parse_ast(Vec* tokens) {
   };
 
   AstProgram* prog = calloc(1, sizeof(AstProgram));
+  prog->decls = vec_new(sizeof(AstDecl));
 
-  prog->main_function = parse_function(&cx);
-
-  // Emit error if we have leftover tokens.
-  if (cx.idx < cx.tokens->len) {
-    emit_error_at(&cx, "Expected EOF but found more tokens");
+  while (cx.idx < cx.tokens->len) {
+    AstDecl* decl = parse_decl(&cx);
+    if (decl->ty != AST_DECL_FN) {
+      panic("Unexpected variable declaration at top level", 1);
+    }
+    vec_push(prog->decls, decl);
   }
 
   return cx.err ? NULL : prog;

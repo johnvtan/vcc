@@ -57,6 +57,7 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_SWITCH, "switch"},
     {TK_CASE, "case"},
     {TK_DEFAULT, "default"},
+    {TK_COMMA, ","},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))

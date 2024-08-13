@@ -17,6 +17,7 @@ typedef enum {
   EXPR_INT_CONST,
   EXPR_VAR,
   EXPR_TERNARY,
+  EXPR_FN_CALL,
 } AstExprType;
 
 struct AstExpr {
@@ -78,12 +79,39 @@ struct AstExpr {
 
     // EXPR_VAR
     String* ident;
+
+    // EXPR_FN_CALL
+    struct {
+      String* ident;
+
+      // Vec<AstExpr>
+      Vec* args;
+    } fn_call;
   };
 };
 
 typedef struct {
-  String* name;
-  AstExpr* init;
+  enum {
+    AST_DECL_VAR,
+    AST_DECL_FN,
+  } ty;
+
+  union {
+    struct {
+      String* name;
+      AstExpr* init;
+    } var;
+
+    struct {
+      String* name;
+
+      // Vec<String>
+      Vec* params;
+
+      // Vec<AstBlockItem>
+      Vec* body;
+    } fn;
+  };
 } AstDecl;
 
 typedef struct {
@@ -189,39 +217,9 @@ struct AstStmt {
   };
 };
 
-//
-// AST node definition
-//
-typedef enum {
-  NODE_FN,
-  NODE_STMT,
-  NODE_EXPR,
-  NODE_DECL,
-} AstNodeType;
-
-typedef struct AstNode {
-  AstNodeType ty;
-  union {
-    // NODE_FN
-    struct {
-      String* name;
-      // Vec<AstBlockItem>
-      Vec* body;
-    } fn;
-
-    // NODE_STMT
-    AstStmt* stmt;
-
-    // NODE_EXPR
-    AstExpr* expr;
-
-    // NODE_DECL
-    AstDecl* decl;
-  };
-} AstNode;
-
 typedef struct {
-  AstNode* main_function;
+  // Vec<AstDecl>
+  Vec* decls;
 } AstProgram;
 
 AstProgram* parse_ast(Vec* token);

@@ -519,15 +519,16 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
 }
 
 static void gen_decl(AstDecl* decl, Vec* out) {
-  if (!decl->init) {
+  if (!decl->var.init) {
     return;
   }
 
-  if (decl->init->ty != EXPR_BINARY && decl->init->binary.op != BINARY_ASSIGN) {
-    panic("Invalid init decl expr ty %u", decl->init->ty);
+  if (decl->var.init->ty != EXPR_BINARY &&
+      decl->var.init->binary.op != BINARY_ASSIGN) {
+    panic("Invalid init decl expr ty %u", decl->var.init->ty);
   }
 
-  gen_assign(decl->init, out);
+  gen_assign(decl->var.init, out);
 }
 
 static void gen_block_item(AstBlockItem* block_item, Vec* out) {
@@ -538,7 +539,7 @@ static void gen_block_item(AstBlockItem* block_item, Vec* out) {
   }
 }
 
-static IrFunction* gen_function(AstNode* ast_function) {
+static IrFunction* gen_function(AstDecl* ast_function) {
   IrFunction* ir_function = calloc(1, sizeof(IrFunction));
   ir_function->instructions = vec_new(sizeof(IrInstruction));
   ir_function->name = ast_function->fn.name;
@@ -554,6 +555,7 @@ static IrFunction* gen_function(AstNode* ast_function) {
 
 IrProgram* gen_ir(AstProgram* ast_program) {
   IrProgram* ir_program = calloc(1, sizeof(IrProgram));
-  ir_program->function = gen_function(ast_program->main_function);
+  AstDecl* main_function = vec_get(ast_program->decls, 0);
+  ir_program->function = gen_function(main_function);
   return ir_program;
 }
