@@ -90,6 +90,10 @@ struct AstExpr {
   };
 };
 
+typedef struct AstFnParam {
+  String* ident;
+} AstFnParam;
+
 typedef struct {
   enum {
     AST_DECL_VAR,
@@ -105,7 +109,7 @@ typedef struct {
     struct {
       String* name;
 
-      // Vec<String>
+      // Vec<AstFnParam>
       Vec* params;
 
       // Vec<AstBlockItem>
@@ -177,6 +181,7 @@ struct AstStmt {
     struct {
       struct {
         enum {
+          FOR_INIT_NONE,
           FOR_INIT_DECL,
           FOR_INIT_EXPR,
         } ty;

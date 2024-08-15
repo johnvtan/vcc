@@ -8,6 +8,7 @@
 // Forward declarations
 //
 typedef struct ParseContext ParseContext;
+static AstDecl* parse_variable_decl(ParseContext* cx);
 static AstDecl* parse_decl(ParseContext* cx);
 static AstStmt* parse_stmt(ParseContext* cx);
 
@@ -15,12 +16,44 @@ static AstStmt* parse_stmt(ParseContext* cx);
 // Parsing Context definition
 //
 
-typedef struct VariableScope VariableScope;
+typedef struct IdentifierScope IdentifierScope;
+typedef struct IdentifierInfo {
+  String* name;  // internal name, could be different from the key
+  enum {
+    NO_LINKAGE = 0,    // local variables
+    INTERNAL_LINKAGE,  // static variables
+    EXTERNAL_LINKAGE,  // global variables
+  } linkage;
+} IdentifierInfo;
 
-struct VariableScope {
-  Hashmap* map;  // Hashmap<String, String>
-  VariableScope* parent;
+static IdentifierInfo* new_ident_info(String* name, int linkage) {
+  IdentifierInfo* info = calloc(1, sizeof(IdentifierInfo));
+  info->name = name;
+  info->linkage = linkage;
+  return info;
+}
+
+struct IdentifierScope {
+  Hashmap* map;  // Hashmap<String, IdentifierInfo>
+  IdentifierScope* parent;
 };
+
+typedef struct {
+  IdentifierInfo* info;
+  bool in_current_scope;
+} ResolvedIdentifier;
+
+static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
+                                             String* ident) {
+  for (IdentifierScope* scope = curr_scope; scope; scope = scope->parent) {
+    IdentifierInfo* info = hashmap_get(scope->map, ident);
+    if (info) {
+      return (ResolvedIdentifier){info, scope == curr_scope};
+    }
+  }
+
+  return (ResolvedIdentifier){NULL, false};
+}
 
 // This is basically an iterator through the token list.
 // Vec is essentially a stack and only supports pushing to/popping from the
@@ -31,7 +64,7 @@ struct ParseContext {
   bool err;
 
   size_t var_count;
-  VariableScope* scope;  // per block
+  IdentifierScope* scope;  // per block
 
   // defined labels
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
@@ -53,18 +86,6 @@ struct ParseContext {
 
 static inline bool at_top_level(ParseContext* cx) {
   return cx->scope->parent == NULL;
-}
-
-static String* resolve_variable(ParseContext* cx, String* ident) {
-  for (VariableScope* scope = cx->scope; scope; scope = scope->parent) {
-    String* name = hashmap_get(scope->map, ident);
-    if (name) {
-      return name;
-    }
-  }
-
-  panic("Could not resolve variable %s", cstring(ident));
-  return NULL;
 }
 
 // Peeks ahead n+1 tokens
@@ -155,6 +176,51 @@ static AstExpr* expr_ternary(AstExpr* cond, AstExpr* then, AstExpr* else_) {
 // they correspond to precedence 2/1/0 in
 // https://en.cppreference.com/w/c/language/operator_precedence
 static AstExpr* parse_prefix_unary(ParseContext* cx);
+static AstExpr* parse_function_call(ParseContext* cx) {
+  AstExpr* e = expr(EXPR_FN_CALL);
+  Token t = expect(cx, TK_IDENT);
+
+  ResolvedIdentifier r = resolve_identifier(cx->scope, t.content);
+  if (r.info == NULL) {
+    panic("Function %s called before definition", cstring(t.content));
+  }
+  e->fn_call.ident = r.info->name;
+
+  expect(cx, TK_OPEN_PAREN);
+
+  if (match(cx, TK_CLOSE_PAREN)) {
+    consume(cx);
+    // no arguments;
+    return e;
+  }
+
+  // Handle args
+  e->fn_call.args = vec_new(sizeof(AstExpr));
+  while (true) {
+    AstExpr* arg = parse_expr(cx, PREC_MIN);
+    vec_push(e->fn_call.args, arg);
+
+    if (match(cx, TK_CLOSE_PAREN)) {
+      consume(cx);
+      break;
+    }
+    expect(cx, TK_COMMA);
+  }
+  return e;
+}
+
+static AstExpr* parse_variable(ParseContext* cx) {
+  AstExpr* e = expr(EXPR_VAR);
+  Token t = expect(cx, TK_IDENT);
+  IdentifierInfo* info = resolve_identifier(cx->scope, t.content).info;
+  if (!info) {
+    emit_error_at(cx, "Undeclared variable: %s", cstring(t.content));
+    exit(-1);
+  }
+  e->ident = info->name;
+  return e;
+}
+
 static AstExpr* parse_primary(ParseContext* cx) {
   if (match(cx, TK_NUM_CONST)) {
     Token t = consume(cx);
@@ -164,15 +230,10 @@ static AstExpr* parse_primary(ParseContext* cx) {
   }
 
   if (match(cx, TK_IDENT)) {
-    Token t = consume(cx);
-    String* unique_name = resolve_variable(cx, t.content);
-    if (!unique_name) {
-      emit_error_at(cx, "Undeclared variable: %s", cstring(t.content));
-      exit(-1);
+    if (peek_ahead(cx, 1).ty == TK_OPEN_PAREN) {
+      return parse_function_call(cx);
     }
-    AstExpr* e = expr(EXPR_VAR);
-    e->ident = unique_name;
-    return e;
+    return parse_variable(cx);
   }
 
   if (match(cx, TK_OPEN_PAREN)) {
@@ -374,7 +435,6 @@ static void parse_block_item(ParseContext* cx, Vec* out) {
   if (peek(cx).ty == TK_INT) {
     b->ty = BLOCK_DECL;
     b->decl = parse_decl(cx);
-    expect(cx, TK_SEMICOLON);
   } else {
     b->ty = BLOCK_STMT;
     b->stmt = parse_stmt(cx);
@@ -383,14 +443,15 @@ static void parse_block_item(ParseContext* cx, Vec* out) {
 
 // Returns Vec<AstBlockItem>.
 // Parsing includes consuming { and } tokens.
-static Vec* parse_block(ParseContext* cx) {
-  expect(cx, TK_OPEN_BRACE);
-  VariableScope scope = {
-      .map = hashmap_new(),
+static Vec* parse_block_with_ident_map(ParseContext* cx, Hashmap* h) {
+  IdentifierScope scope = {
+      .map = h,
       .parent = cx->scope,
   };
+
   cx->scope = &scope;
 
+  expect(cx, TK_OPEN_BRACE);
   Vec* block = vec_new(sizeof(AstBlockItem));
   while (peek(cx).ty != TK_CLOSE_BRACE) {
     parse_block_item(cx, block);
@@ -398,8 +459,11 @@ static Vec* parse_block(ParseContext* cx) {
 
   expect(cx, TK_CLOSE_BRACE);
   cx->scope = cx->scope->parent;
-
   return block;
+}
+
+static Vec* parse_block(ParseContext* cx) {
+  return parse_block_with_ident_map(cx, hashmap_new());
 }
 
 static AstStmt* parse_stmt(ParseContext* cx) {
@@ -611,7 +675,7 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     s->ty = STMT_FOR;
 
     // for stmt gets new scope
-    VariableScope scope = {
+    IdentifierScope scope = {
         .map = hashmap_new(),
         .parent = cx->scope,
     };
@@ -628,14 +692,20 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     expect(cx, TK_OPEN_PAREN);
 
-    if (match(cx, TK_INT)) {
+    if (match(cx, TK_SEMICOLON)) {
+      s->for_.init.ty = FOR_INIT_NONE;
+      consume(cx);
+    } else if (match(cx, TK_INT)) {
       s->for_.init.ty = FOR_INIT_DECL;
-      s->for_.init.decl = parse_decl(cx);
+      s->for_.init.decl = parse_variable_decl(cx);  // consumes semicolon
+      if (s->for_.init.decl->ty != AST_DECL_VAR) {
+        panic("Only variable declarations allowed in for init", 1);
+      }
     } else if (!match(cx, TK_SEMICOLON)) {
       s->for_.init.ty = FOR_INIT_EXPR;
       s->for_.init.expr = parse_expr(cx, PREC_MIN);
+      expect(cx, TK_SEMICOLON);
     }
-    expect(cx, TK_SEMICOLON);
 
     if (!match(cx, TK_SEMICOLON)) {
       s->for_.cond = parse_expr(cx, PREC_MIN);
@@ -679,23 +749,70 @@ static AstStmt* parse_stmt(ParseContext* cx) {
   return s;
 }
 
-static AstDecl* parse_decl(ParseContext* cx) {
+static AstDecl* parse_function(ParseContext* cx) {
   expect(cx, TK_INT);
-  Token t = expect(cx, TK_IDENT);
+
+  cx->labels = hashmap_new();
+  cx->gone_to_labels = vec_new(sizeof(String));
+
   AstDecl* decl = calloc(1, sizeof(AstDecl));
+  decl->ty = AST_DECL_FN;
+  decl->fn.params = vec_new(sizeof(AstFnParam));
 
-  if (match(cx, TK_OPEN_PAREN)) {
-    decl->ty = AST_DECL_FN;
-    cx->labels = hashmap_new();
-    cx->gone_to_labels = vec_new(sizeof(String));
+  Token t = expect(cx, TK_IDENT);
+  decl->fn.name = t.content;
 
-    decl->fn.name = t.content;
+  // check for conflicting name with local variable.
+  ResolvedIdentifier resolved = resolve_identifier(cx->scope, decl->fn.name);
+  if (resolved.in_current_scope && resolved.info &&
+      resolved.info->linkage == NO_LINKAGE) {
+    panic("Function declaration %s conflicts with local variable name",
+          decl->fn.name);
+  }
+  hashmap_put(cx->scope->map, decl->fn.name,
+              new_ident_info(decl->fn.name, EXTERNAL_LINKAGE));
 
-    expect(cx, TK_OPEN_PAREN);
-    expect(cx, TK_VOID);
+  expect(cx, TK_OPEN_PAREN);
+
+  Hashmap* ident_map = hashmap_new();
+
+  // Parse parameter list
+  if (match(cx, TK_VOID)) {
+    consume(cx);
     expect(cx, TK_CLOSE_PAREN);
+  } else {
+    while (true) {
+      expect(cx, TK_INT);
 
-    decl->fn.body = parse_block(cx);
+      // TODO: needed?
+      // AstFnParam* param = vec_push_empty(decl->fn.params);
+
+      Token t = expect(cx, TK_IDENT);
+      if (hashmap_get(ident_map, t.content) != NULL) {
+        panic("Parameter %s redeclared", cstring(t.content));
+      }
+
+      String* unique_var_name =
+          string_format("%s.%u", cstring(t.content), cx->var_count++);
+      hashmap_put(ident_map, t.content,
+                  new_ident_info(unique_var_name, NO_LINKAGE));
+      decl->var.name = unique_var_name;
+
+      if (match(cx, TK_CLOSE_PAREN)) {
+        consume(cx);
+        break;
+      }
+      expect(cx, TK_COMMA);
+    }
+  }
+
+  if (match(cx, TK_OPEN_BRACE)) {
+    // Handle function definition
+    if (!at_top_level(cx)) {
+      panic("Nested function definition not allowed", 1);
+    }
+
+    decl->fn.body = parse_block_with_ident_map(cx, ident_map);
 
     // check all goto statements point to a valid label
     vec_for_each(cx->gone_to_labels, String, label) {
@@ -704,38 +821,58 @@ static AstDecl* parse_decl(ParseContext* cx) {
       }
     }
   } else {
-    if (hashmap_get(cx->scope->map, t.content) != NULL) {
-      panic("Variable %s redefined", t.content);
-    }
-
-    // Variable renaming ensures all variable names are unique
-    // Generated name should have a period to ensure they don't conflict
-    // with user identifiers.
-    String* unique_var_name =
-        string_format("%s.%u", cstring(t.content), cx->var_count++);
-
-    hashmap_put(cx->scope->map, t.content, unique_var_name);
-    decl->ty = AST_DECL_VAR;
-    decl->var.name = unique_var_name;
-
-    if (peek(cx).ty == TK_EQ) {
-      consume(cx);
-
-      // Under the hood, init expressions are rewritten to be
-      // an assign expr.
-      AstExpr* init_expr = parse_expr(cx, PREC_MIN);
-      AstExpr* var = expr(EXPR_VAR);
-      var->ident = decl->var.name;
-
-      decl->var.init = expr_binary(BINARY_ASSIGN, var, init_expr);
-    }
+    // function declaration
+    expect(cx, TK_SEMICOLON);
   }
 
   return decl;
 }
 
+static AstDecl* parse_variable_decl(ParseContext* cx) {
+  expect(cx, TK_INT);
+
+  AstDecl* decl = calloc(1, sizeof(AstDecl));
+  decl->ty = AST_DECL_VAR;
+
+  Token t = expect(cx, TK_IDENT);
+  if (hashmap_get(cx->scope->map, t.content) != NULL) {
+    panic("Variable %s redefined", t.content);
+  }
+
+  // Variable renaming ensures all variable names are unique
+  // Generated name should have a period to ensure they don't conflict
+  // with user identifiers.
+  String* unique_var_name =
+      string_format("%s.%u", cstring(t.content), cx->var_count++);
+  hashmap_put(cx->scope->map, t.content,
+              new_ident_info(unique_var_name, NO_LINKAGE));
+  decl->var.name = unique_var_name;
+
+  if (peek(cx).ty == TK_EQ) {
+    consume(cx);
+
+    // Under the hood, init expressions are rewritten to be
+    // an assign expr.
+    AstExpr* init_expr = parse_expr(cx, PREC_MIN);
+    AstExpr* var = expr(EXPR_VAR);
+    var->ident = decl->var.name;
+
+    decl->var.init = expr_binary(BINARY_ASSIGN, var, init_expr);
+  }
+  expect(cx, TK_SEMICOLON);
+  return decl;
+}
+
+static AstDecl* parse_decl(ParseContext* cx) {
+  if (peek_ahead(cx, 2).ty == TK_OPEN_PAREN) {
+    return parse_function(cx);
+  }
+
+  return parse_variable_decl(cx);
+}
+
 AstProgram* parse_ast(Vec* tokens) {
-  VariableScope global_scope = {
+  IdentifierScope global_scope = {
       .map = hashmap_new(),
       .parent = NULL,
   };

@@ -458,7 +458,7 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       // .BREAK_LABEL:
 
       // This is a union; just checking that an init exists.
-      if (stmt->for_.init.decl) {
+      if (stmt->for_.init.ty != FOR_INIT_NONE) {
         if (stmt->for_.init.ty == FOR_INIT_DECL) {
           gen_decl(stmt->for_.init.decl, out);
         } else {

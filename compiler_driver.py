@@ -11,6 +11,7 @@ if __name__ == '__main__':
     parser.add_argument("--tacky", help="Run up to tacky", action="store_true")
     parser.add_argument("--codegen", help="Run up to codegen", action="store_true")
     parser.add_argument("-S", "--asm_file", help="assembly file", action="store_true")
+    parser.add_argument("-c", "--no_linker", help="run without linker", action="store_true")
     parser.add_argument("input_file", help="File to compiler")
 
     args = parser.parse_args()
@@ -42,4 +43,5 @@ if __name__ == '__main__':
         exit(e.returncode)
 
     if emit:
-        run(f'gcc {asm_file} -o {basename}', check=True, shell=True)
+        run(f'gcc  {"-c" if args.no_linker else ""} {asm_file} -o {basename}{".o" if args.no_linker else ""}',
+                check=True, shell=True)
