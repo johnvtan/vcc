@@ -8,6 +8,26 @@ typedef struct AstStmt AstStmt;
 typedef struct AstExpr AstExpr;
 
 //
+// AST type definition
+//
+
+typedef struct AstType AstType;
+struct AstType {
+  enum {
+    TYPE_INT,
+    TYPE_FN,
+  } ty;
+
+  union {
+    // TYPE_FN
+    struct {
+      int num_params;
+      bool defined;
+    } fn;
+  };
+};
+
+//
 // AST expression definition
 //
 
@@ -22,6 +42,7 @@ typedef enum {
 
 struct AstExpr {
   AstExprType ty;
+  AstType ast_type;
   union {
     // EXPR_FACT
     int int_const;
@@ -91,6 +112,7 @@ struct AstExpr {
 };
 
 typedef struct AstFnParam {
+  AstType ast_type;
   String* ident;
 } AstFnParam;
 

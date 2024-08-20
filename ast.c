@@ -55,6 +55,16 @@ static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
   return (ResolvedIdentifier){NULL, false};
 }
 
+typedef Hashmap TypeTable;
+static AstType* type_table_get(TypeTable* tt, String* unique_name) {
+  return hashmap_get(tt, unique_name);
+}
+static void type_table_put(TypeTable* tt, String* name, AstType* type) {
+  AstType* copy = calloc(1, sizeof(AstType));
+  *copy = *type;
+  hashmap_put(tt, name, copy);
+}
+
 // This is basically an iterator through the token list.
 // Vec is essentially a stack and only supports pushing to/popping from the
 // back.
@@ -65,6 +75,8 @@ struct ParseContext {
 
   size_t var_count;
   IdentifierScope* scope;  // per block
+  TypeTable*
+      type_table;  // global -- each identifier should use its unique name.
 
   // defined labels
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
@@ -136,10 +148,25 @@ static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
     emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
     exit(-1);
   }
+
+  if (val->ast_type.ty != TYPE_INT) {
+    emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
+    exit(-1);
+  }
 }
 
 //
-// Ast type helper funcs
+// AST type parsing
+//
+
+// Parses a type of any expr (i.e., not a function definition).
+static AstType parse_expr_type(ParseContext* cx) {
+  expect(cx, TK_INT);
+  return (AstType){.ty = TYPE_INT};
+}
+
+//
+// Ast expr helper funcs
 //
 
 static AstExpr* parse_expr(ParseContext* cx, int min_prec);
@@ -147,6 +174,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec);
 static AstExpr* expr(AstExprType ty) {
   AstExpr* e = calloc(1, sizeof(AstExpr));
   e->ty = ty;
+  e->ast_type.ty = TYPE_INT;
   return e;
 }
 
@@ -155,6 +183,11 @@ static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
   e->binary.op = op;
   e->binary.lhs = lhs;
   e->binary.rhs = rhs;
+
+  // TODO: typechecking needs to be improved
+  if (lhs->ast_type.ty != TYPE_INT || rhs->ast_type.ty != TYPE_INT) {
+    panic("binary ops only work on integer types", 1);
+  }
   return e;
 }
 
@@ -184,18 +217,23 @@ static AstExpr* parse_function_call(ParseContext* cx) {
   if (r.info == NULL) {
     panic("Function %s called before definition", cstring(t.content));
   }
-  e->fn_call.ident = r.info->name;
 
-  expect(cx, TK_OPEN_PAREN);
-
-  if (match(cx, TK_CLOSE_PAREN)) {
-    consume(cx);
-    // no arguments;
-    return e;
+  // typecheck function call against declaration
+  AstType* decltype = type_table_get(cx->type_table, r.info->name);
+  assert(decltype);
+  if (decltype->ty != TYPE_FN) {
+    panic("Cannot call non-function", 1);
   }
 
-  // Handle args
+  e->fn_call.ident = r.info->name;
   e->fn_call.args = vec_new(sizeof(AstExpr));
+
+  expect(cx, TK_OPEN_PAREN);
+  if (match(cx, TK_CLOSE_PAREN)) {
+    consume(cx);
+    goto typecheck_args;
+  }
+
   while (true) {
     AstExpr* arg = parse_expr(cx, PREC_MIN);
     vec_push(e->fn_call.args, arg);
@@ -206,6 +244,12 @@ static AstExpr* parse_function_call(ParseContext* cx) {
     }
     expect(cx, TK_COMMA);
   }
+
+typecheck_args:
+  if ((size_t) decltype->fn.num_params != e->fn_call.args->len) {
+    panic("Mismatching number of parameters to %s", cstring(e->fn_call.ident));
+  }
+
   return e;
 }
 
@@ -218,6 +262,11 @@ static AstExpr* parse_variable(ParseContext* cx) {
     exit(-1);
   }
   e->ident = info->name;
+  AstType* ast_type = type_table_get(cx->type_table, e->ident);
+  if (!ast_type) {
+    panic("Variable %s has no type", cstring(e->ident));
+  }
+  e->ast_type = *ast_type;
   return e;
 }
 
@@ -561,6 +610,10 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     expect(cx, TK_OPEN_PAREN);
     s->switch_.cond = parse_expr(cx, PREC_MIN);
+    AstType* cond_type = &s->switch_.cond->ast_type;
+    if (cond_type->ty != TYPE_INT) {
+      panic("Cannot switch on non-integer", 1);
+    }
     expect(cx, TK_CLOSE_PAREN);
 
     s->switch_.body = parse_stmt(cx);
@@ -749,11 +802,45 @@ static AstStmt* parse_stmt(ParseContext* cx) {
   return s;
 }
 
-static AstDecl* parse_function(ParseContext* cx) {
-  expect(cx, TK_INT);
+static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
+  expect(cx, TK_OPEN_PAREN);
+  Vec* param_list = vec_new(sizeof(AstFnParam));
+  if (match(cx, TK_VOID)) {
+    consume(cx);
+    expect(cx, TK_CLOSE_PAREN);
+    return param_list;
+  }
 
-  cx->labels = hashmap_new();
-  cx->gone_to_labels = vec_new(sizeof(String));
+  while (true) {
+    AstType ast_type = parse_expr_type(cx);
+    Token t = expect(cx, TK_IDENT);
+
+    AstFnParam* param = vec_push_empty(param_list);
+    param->ast_type = ast_type;
+    param->ident = t.content;
+
+    if (hashmap_get(ident_map, t.content) != NULL) {
+      panic("Parameter %s redeclared", cstring(t.content));
+    }
+
+    String* unique_var_name =
+        string_format("%s.%u", cstring(t.content), cx->var_count++);
+    hashmap_put(ident_map, t.content,
+                new_ident_info(unique_var_name, NO_LINKAGE));
+    type_table_put(cx->type_table, unique_var_name, &ast_type);
+
+    if (match(cx, TK_CLOSE_PAREN)) {
+      break;
+    }
+    expect(cx, TK_COMMA);
+  }
+
+  expect(cx, TK_CLOSE_PAREN);
+  return param_list;
+}
+
+static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
+  parse_expr_type(cx);
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_FN;
@@ -761,75 +848,89 @@ static AstDecl* parse_function(ParseContext* cx) {
 
   Token t = expect(cx, TK_IDENT);
   decl->fn.name = t.content;
+  decl->fn.params = parse_parameter_list(cx, ident_map);
 
-  // check for conflicting name with local variable.
   ResolvedIdentifier resolved = resolve_identifier(cx->scope, decl->fn.name);
-  if (resolved.in_current_scope && resolved.info &&
-      resolved.info->linkage == NO_LINKAGE) {
-    panic("Function declaration %s conflicts with local variable name",
-          decl->fn.name);
+  if (resolved.info) {
+    if (resolved.in_current_scope && resolved.info->linkage == NO_LINKAGE) {
+      panic("Function declaration %s conflicts with variable name",
+            cstring(decl->fn.name));
+    }
   }
-  hashmap_put(cx->scope->map, decl->fn.name,
-              new_ident_info(decl->fn.name, EXTERNAL_LINKAGE));
 
-  expect(cx, TK_OPEN_PAREN);
+  // Always add a new entry in the ident map at current scope if it doesn't
+  // exist.
+  if (!resolved.in_current_scope) {
+    hashmap_put(cx->scope->map, decl->fn.name,
+                new_ident_info(decl->fn.name, EXTERNAL_LINKAGE));
+  }
 
+  // typecheck the declaration
+  AstType* declared_type = type_table_get(cx->type_table, decl->fn.name);
+  size_t num_params = decl->fn.params->len;
+  if (declared_type) {
+    if ((size_t)declared_type->fn.num_params != num_params) {
+      panic(
+          "Function declaration %s conflicts with mismatching parameter list. "
+          "Expected %d but got %d parameters.",
+          cstring(decl->fn.name), decl->fn.params->len,
+          declared_type->fn.num_params);
+    }
+  } else {
+    // declared type doesn't exist in type table, so insert
+    AstType ast_type = {
+        .ty = TYPE_FN,
+        .fn = {
+            .num_params = num_params,
+            .defined = false,  // it didn't exist before so it can't be defined.
+        }};
+    type_table_put(cx->type_table, decl->fn.name, &ast_type);
+  }
+
+  return decl;
+}
+
+static AstDecl* parse_function(ParseContext* cx) {
   Hashmap* ident_map = hashmap_new();
-
-  // Parse parameter list
-  if (match(cx, TK_VOID)) {
+  AstDecl* decl = parse_function_signature(cx, ident_map);
+  if (match(cx, TK_SEMICOLON)) {
     consume(cx);
-    expect(cx, TK_CLOSE_PAREN);
-  } else {
-    while (true) {
-      expect(cx, TK_INT);
-
-      // TODO: needed?
-      // AstFnParam* param = vec_push_empty(decl->fn.params);
-
-      Token t = expect(cx, TK_IDENT);
-      if (hashmap_get(ident_map, t.content) != NULL) {
-        panic("Parameter %s redeclared", cstring(t.content));
-      }
-
-      String* unique_var_name =
-          string_format("%s.%u", cstring(t.content), cx->var_count++);
-      hashmap_put(ident_map, t.content,
-                  new_ident_info(unique_var_name, NO_LINKAGE));
-      decl->var.name = unique_var_name;
-
-      if (match(cx, TK_CLOSE_PAREN)) {
-        consume(cx);
-        break;
-      }
-      expect(cx, TK_COMMA);
-    }
+    return decl;
   }
 
-  if (match(cx, TK_OPEN_BRACE)) {
-    // Handle function definition
-    if (!at_top_level(cx)) {
-      panic("Nested function definition not allowed", 1);
-    }
+  // Handle function body
+  if (!match(cx, TK_OPEN_BRACE)) {
+    panic("Expected open brace for function body", 1);
+  }
 
-    decl->fn.body = parse_block_with_ident_map(cx, ident_map);
+  AstType* decltype = type_table_get(cx->type_table, decl->fn.name);
+  assert(decltype);
+  if (decltype->fn.defined) {
+    panic("Function %s redeclared", cstring(decl->fn.name));
+  }
+  decltype->fn.defined = true;
 
-    // check all goto statements point to a valid label
-    vec_for_each(cx->gone_to_labels, String, label) {
-      if (hashmap_get(cx->labels, iter.label) == NULL) {
-        panic("Goto to undeclared label %s", iter.label);
-      }
+  cx->labels = hashmap_new();
+  cx->gone_to_labels = vec_new(sizeof(String));
+
+  if (!at_top_level(cx)) {
+    panic("Nested function definition not allowed", 1);
+  }
+
+  decl->fn.body = parse_block_with_ident_map(cx, ident_map);
+
+  // check all goto statements point to a valid label
+  vec_for_each(cx->gone_to_labels, String, label) {
+    if (hashmap_get(cx->labels, iter.label) == NULL) {
+      panic("Goto to undeclared label %s", iter.label);
     }
-  } else {
-    // function declaration
-    expect(cx, TK_SEMICOLON);
   }
 
   return decl;
 }
 
 static AstDecl* parse_variable_decl(ParseContext* cx) {
-  expect(cx, TK_INT);
+  AstType var_type = parse_expr_type(cx);  // put in symbol table
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_VAR;
@@ -844,9 +945,12 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
   // with user identifiers.
   String* unique_var_name =
       string_format("%s.%u", cstring(t.content), cx->var_count++);
+
   hashmap_put(cx->scope->map, t.content,
               new_ident_info(unique_var_name, NO_LINKAGE));
+  assert(var_type.ty == TYPE_INT);
   decl->var.name = unique_var_name;
+  type_table_put(cx->type_table, unique_var_name, &var_type);
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
@@ -858,6 +962,9 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
     var->ident = decl->var.name;
 
     decl->var.init = expr_binary(BINARY_ASSIGN, var, init_expr);
+    if (decl->var.init->ast_type.ty != TYPE_INT) {
+      panic("Expected integer expression for variable init", 1);
+    }
   }
   expect(cx, TK_SEMICOLON);
   return decl;
@@ -886,6 +993,7 @@ AstProgram* parse_ast(Vec* tokens) {
       .break_stack = vec_new(sizeof(String*)),
       .continue_stack = vec_new(sizeof(String*)),
       .case_stack = vec_new(sizeof(Vec*)),
+      .type_table = hashmap_new(),
   };
 
   AstProgram* prog = calloc(1, sizeof(AstProgram));
