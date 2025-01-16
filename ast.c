@@ -16,9 +16,14 @@ static AstStmt* parse_stmt(ParseContext* cx);
 // Parsing Context definition
 //
 
+// Identifier resolution
 typedef struct IdentifierScope IdentifierScope;
 typedef struct IdentifierInfo {
-  String* name;  // internal name, could be different from the key
+  // Internal name, could be different from the key
+  // This should be a unique name that can be used
+  // as the key to the TypeTable.
+  String* name;
+
   enum {
     NO_LINKAGE = 0,    // local variables
     INTERNAL_LINKAGE,  // static variables
@@ -55,6 +60,11 @@ static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
   return (ResolvedIdentifier){NULL, false};
 }
 
+//
+// Type checking
+// Note: type checking is handled separately from identifier resolution.
+// The TypeTable is a flat map where each identifier has a unique name.
+//
 typedef Hashmap TypeTable;
 static AstType* type_table_get(TypeTable* tt, String* unique_name) {
   return hashmap_get(tt, unique_name);
@@ -75,8 +85,9 @@ struct ParseContext {
 
   size_t var_count;
   IdentifierScope* scope;  // per block
-  TypeTable*
-      type_table;  // global -- each identifier should use its unique name.
+
+  // global -- each identifier should use its unique name.
+  TypeTable* type_table;
 
   // defined labels
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
@@ -229,23 +240,23 @@ static AstExpr* parse_function_call(ParseContext* cx) {
   e->fn_call.args = vec_new(sizeof(AstExpr));
 
   expect(cx, TK_OPEN_PAREN);
-  if (match(cx, TK_CLOSE_PAREN)) {
-    consume(cx);
-    goto typecheck_args;
-  }
 
-  while (true) {
-    AstExpr* arg = parse_expr(cx, PREC_MIN);
-    vec_push(e->fn_call.args, arg);
+  if (!match(cx, TK_CLOSE_PAREN)) {
+    // Parse fn args if any exist.
+    while (true) {
+      AstExpr* arg = parse_expr(cx, PREC_MIN);
+      vec_push(e->fn_call.args, arg);
 
-    if (match(cx, TK_CLOSE_PAREN)) {
-      consume(cx);
-      break;
+      if (match(cx, TK_CLOSE_PAREN)) {
+        break;
+      }
+      expect(cx, TK_COMMA);
     }
-    expect(cx, TK_COMMA);
   }
 
-typecheck_args:
+  expect(cx, TK_CLOSE_PAREN);
+
+  // Verify fn_call has correct number of arguments.
   if ((size_t) decltype->fn.num_params != e->fn_call.args->len) {
     panic("Mismatching number of parameters to %s", cstring(e->fn_call.ident));
   }
@@ -262,6 +273,8 @@ static AstExpr* parse_variable(ParseContext* cx) {
     exit(-1);
   }
   e->ident = info->name;
+
+  // Propagate type into expr
   AstType* ast_type = type_table_get(cx->type_table, e->ident);
   if (!ast_type) {
     panic("Variable %s has no type", cstring(e->ident));
@@ -448,8 +461,6 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   while (info.prec > 0 && info.prec <= min_prec) {
     consume(cx);  // consume the token because it is a bin op
     if (info.is_assign) {
-      // rewrite compound assigns
-      // e.g., a += 3 --> a = a + 3
       assert_lvalue(cx, lhs);
 
       // assigns are right associative
@@ -902,6 +913,9 @@ static AstDecl* parse_function(ParseContext* cx) {
   if (!match(cx, TK_OPEN_BRACE)) {
     panic("Expected open brace for function body", 1);
   }
+  if (!at_top_level(cx)) {
+    panic("Nested function definition not allowed", 1);
+  }
 
   AstType* decltype = type_table_get(cx->type_table, decl->fn.name);
   assert(decltype);
@@ -912,10 +926,6 @@ static AstDecl* parse_function(ParseContext* cx) {
 
   cx->labels = hashmap_new();
   cx->gone_to_labels = vec_new(sizeof(String));
-
-  if (!at_top_level(cx)) {
-    panic("Nested function definition not allowed", 1);
-  }
 
   decl->fn.body = parse_block_with_ident_map(cx, ident_map);
 

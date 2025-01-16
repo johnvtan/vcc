@@ -379,12 +379,13 @@ static x64_Function* convert_function(IrFunction* ir_function) {
 }
 
 x64_Program* generate_x86(IrProgram* ast_program) {
-  x64_Program* x64_prog = calloc(1, sizeof(x64_Program));
+  return 0;
+  // x64_Program* x64_prog = calloc(1, sizeof(x64_Program));
 
-  ReplacePseudoregsReturn ret =
-      replace_pseudoregs(convert_function(ast_program->function));
+  // ReplacePseudoregsReturn ret =
+  //     replace_pseudoregs(convert_function(ast_program->function));
 
-  x64_prog->function = fixup_instructions(ret.function, ret.stack);
+  // x64_prog->function = fixup_instructions(ret.function, ret.stack);
 
-  return x64_prog;
+  // return x64_prog;
 }

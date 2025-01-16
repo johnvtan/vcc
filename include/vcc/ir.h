@@ -40,28 +40,39 @@ typedef enum {
   IR_JZ,
   IR_JNZ,
   IR_LABEL,
+
+  IR_FN_CALL,
 } IrType;
 
 typedef struct {
   IrType ty;
 
+  // Used by any instructions that return a value,
+  // including most unary/binary ops and IR_FN_CALL.
   IrVal* dst;
   IrVal* r1;
   IrVal* r2;
 
+  // Used by IR_LABEL, IR_JZ, IR_JNZ, IR_FN_CALL
   String* label;
 
+  // IR_FN_CALL: Vec<IrVal>
+  Vec* args;
 } IrInstruction;
 
 typedef struct {
   String* name;
+
+  // Vec<String>
+  Vec* params;
 
   // Vec<IrInstruction>
   Vec* instructions;
 } IrFunction;
 
 typedef struct {
-  IrFunction* function;
+  // Vec<IrFunction>
+  Vec* functions;
 } IrProgram;
 
 IrProgram* gen_ir(AstProgram* program);

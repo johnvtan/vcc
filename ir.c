@@ -27,6 +27,22 @@ static IrVal* temp(void) {
 }
 
 static IrVal* constant(int val) {
+  if (val == 0) {
+    static IrVal zero = {
+        .ty = IR_VAL_CONST,
+        .constant = 0,
+    };
+    return &zero;
+  }
+
+  if (val == 1) {
+    static IrVal one = {
+        .ty = IR_VAL_CONST,
+        .constant = 1,
+    };
+    return &one;
+  }
+
   IrVal* v = calloc(1, sizeof(IrVal));
   v->ty = IR_VAL_CONST;
   v->constant = val;
@@ -368,8 +384,31 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
       return gen_unary(expr, out);
     case EXPR_VAR:
       return var(expr->ident);
+    case EXPR_FN_CALL: {
+      // Generate instructions to evaluate each argument.
+      Vec* ir_args = vec_new(sizeof(IrVal));
+      vec_for_each(expr->fn_call.args, AstExpr, arg) {
+        IrVal* ir_arg = gen_expr(iter.arg, out);
+        vec_push(ir_args, ir_arg);
+      }
+
+      IrVal* dst = temp();
+      IrInstruction ir_fn_call = {
+          .ty = IR_FN_CALL,
+          .dst = dst,
+          .label = expr->fn_call.ident,
+          .args = ir_args,
+      };
+
+      push_inst(out, ir_fn_call);
+
+      // Always add a return 0 at the end of every function body to ensure
+      // functions always return.
+      push_inst(out, unary_no_dst(IR_RET, constant(0)));
+      return dst;
+    }
     default:
-      panic("Unexpected AstStmt type: %lu", expr->ty);
+      panic("Unexpected AstExpr type: %lu", expr->ty);
   }
 }
 
@@ -519,6 +558,11 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
 }
 
 static void gen_decl(AstDecl* decl, Vec* out) {
+  if (decl->ty != AST_DECL_VAR) {
+    // Ignore function declarations in IR stage.
+    return;
+  }
+
   if (!decl->var.init) {
     return;
   }
@@ -555,7 +599,13 @@ static IrFunction* gen_function(AstDecl* ast_function) {
 
 IrProgram* gen_ir(AstProgram* ast_program) {
   IrProgram* ir_program = calloc(1, sizeof(IrProgram));
-  AstDecl* main_function = vec_get(ast_program->decls, 0);
-  ir_program->function = gen_function(main_function);
+  ir_program->functions = vec_new(sizeof(IrFunction));
+  vec_for_each(ast_program->decls, AstDecl, decl) {
+    if (iter.decl->ty != AST_DECL_FN || iter.decl->fn.body == NULL) {
+      continue;
+    }
+    IrFunction* f = gen_function(iter.decl);
+    vec_push(ir_program->functions, f);
+  }
   return ir_program;
 }
