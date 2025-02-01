@@ -587,7 +587,10 @@ static IrFunction* gen_function(AstDecl* ast_function) {
   IrFunction* ir_function = calloc(1, sizeof(IrFunction));
   ir_function->instructions = vec_new(sizeof(IrInstruction));
   ir_function->name = ast_function->fn.name;
-
+  ir_function->params = vec_new(sizeof(String));
+  vec_for_each(ast_function->fn.params, AstFnParam, param) {
+    vec_push(ir_function->params, iter.param->ident);
+  }
   vec_for_each(ast_function->fn.body, AstBlockItem, block_item) {
     gen_block_item(iter.block_item, ir_function->instructions);
   }

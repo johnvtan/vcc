@@ -177,7 +177,11 @@ int emit_x64(x64_Program* program, const char* outfile) {
   FILE* fp = fopen(outfile, "w+");
   assert(fp);
   Context cx = {.fp = fp};
-  emit_function(&cx, program->function);
+
+  vec_for_each(program->functions, x64_Function, fn) {
+    emit_function(&cx, iter.fn);
+  }
+
   emit(&cx, "\t.section .note.GNU-stack,\"\",@progbits\n");
   return 0;
 }

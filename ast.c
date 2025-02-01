@@ -828,7 +828,6 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
 
     AstFnParam* param = vec_push_empty(param_list);
     param->ast_type = ast_type;
-    param->ident = t.content;
 
     if (hashmap_get(ident_map, t.content) != NULL) {
       panic("Parameter %s redeclared", cstring(t.content));
@@ -839,6 +838,8 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
     hashmap_put(ident_map, t.content,
                 new_ident_info(unique_var_name, NO_LINKAGE));
     type_table_put(cx->type_table, unique_var_name, &ast_type);
+
+    param->ident = unique_var_name;
 
     if (match(cx, TK_CLOSE_PAREN)) {
       break;

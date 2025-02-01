@@ -62,7 +62,6 @@ static x64_Operand* to_x64_op(IrVal* ir) {
       panic("Unexpected IrVal type %lu", ir->ty);
   }
 }
-
 static inline bool is_pseudo(x64_Operand* op) {
   return op->ty == X64_OP_PSEUDO;
 }
@@ -81,6 +80,10 @@ static inline x64_Instruction instr1(x64_InstructionType ty, x64_Operand* r1) {
 
 static inline x64_Instruction instr0(x64_InstructionType ty) {
   return instr2(ty, NULL, NULL);
+}
+
+static inline x64_Instruction alloc_stack(int stack) {
+  return (x64_Instruction){.ty = X64_ALLOC_STACK, .stack = stack};
 }
 
 static inline x64_Instruction label(String* label) {
@@ -169,8 +172,6 @@ static x64_Operand* fixup_pseudoreg(Hashmap* h, x64_Operand* operand,
     return operand;
   }
 
-  // Casting from void* to int is typically unsafe, but hopefully this is fine
-  // because I'm only putting ints in h anyway.
   x64_Operand* stack_operand = hashmap_get(h, operand->pseudo);
 
   if (!stack_operand) {
@@ -197,12 +198,16 @@ static inline bool stack_to_stack_not_allowed(x64_Instruction* instr) {
 //
 // x64 generation passes
 //
-static x64_Function* fixup_instructions(x64_Function* input, int stack_size) {
+static x64_Function* fixup_instructions(x64_Function* input) {
   x64_Function* ret = function(input->name);
 
-  push_instr(ret->instructions,
-             (x64_Instruction){.ty = X64_ALLOC_STACK, .stack = stack_size});
+  // TODO: idk how negative % works
+  int pos_stack_size = input->stack_size * -1;
+  if (pos_stack_size % 16) {
+    pos_stack_size += (16 - pos_stack_size % 16);
+  }
 
+  push_instr(ret->instructions, alloc_stack(-pos_stack_size));
   vec_for_each(input->instructions, x64_Instruction, instr) {
     if (stack_to_stack_not_allowed(iter.instr)) {
       // split up stack->stack ops into
@@ -238,38 +243,50 @@ static x64_Function* fixup_instructions(x64_Function* input, int stack_size) {
   return ret;
 }
 
-typedef struct {
-  x64_Function* function;
-  int stack;
-} ReplacePseudoregsReturn;
-static ReplacePseudoregsReturn replace_pseudoregs(x64_Function* input) {
+static x64_Function* replace_pseudoregs(x64_Function* input) {
   x64_Function* ret = function(input->name);
 
   // maps from pseudoreg name -> x64_Operand(stack)
   Hashmap* stack_map = hashmap_new();
-  int stack_pos = 0;
+  int stack_pos = input->stack_size;
   vec_for_each(input->instructions, x64_Instruction, instr) {
-    // Ignore any instructions that don't use r1/r2
-    // TODO: just make x64_Instruction not a union? Can't rely on checks against
-    // null with unions.
-    if (iter.instr->ty == X64_LABEL || iter.instr->ty == X64_JMP ||
-        iter.instr->ty == X64_JMPCC || iter.instr->ty == X64_ALLOC_STACK) {
-      push_instr(ret->instructions, *iter.instr);
-      continue;
-    }
-    x64_Operand* r1 = fixup_pseudoreg(stack_map, iter.instr->r1, &stack_pos);
-    x64_Operand* r2 = fixup_pseudoreg(stack_map, iter.instr->r2, &stack_pos);
-
-    x64_Instruction cp = instr2(iter.instr->ty, r1, r2);
-    cp.cc = iter.instr->cc;
+    x64_Instruction cp = *iter.instr;
+    cp.r1 = fixup_pseudoreg(stack_map, iter.instr->r1, &stack_pos);
+    cp.r2 = fixup_pseudoreg(stack_map, iter.instr->r2, &stack_pos);
     push_instr(ret->instructions, cp);
   }
 
-  return (ReplacePseudoregsReturn){.function = ret, .stack = stack_pos};
+  ret->stack_size = stack_pos;
+  return ret;
 }
 
 static x64_Function* convert_function(IrFunction* ir_function) {
   x64_Function* ret = function(ir_function->name);
+
+  // Retrieve arguments from registers or stack and move them
+  // into pseudo registers.
+  static const x64_RegType kArgumentRegs[] = {
+      REG_DI, REG_SI, REG_DX, REG_CX, REG_R8, REG_R9,
+  };
+  const size_t kNumArgumentRegs = 6;
+
+  size_t n = 0;
+  vec_for_each(ir_function->params, String, param) {
+    x64_Operand* arg = NULL;
+    if (n < kNumArgumentRegs) {
+      arg = reg(kArgumentRegs[n], 4);
+    } else {
+      int stack_offset = (8 * (n - kNumArgumentRegs)) + 16;
+      arg = stack(stack_offset);
+    }
+    n++;
+    push_instr(ret->instructions, mov(arg, pseudo(iter.param)));
+
+    // TODO: correct sizing.
+    ret->stack_size -= 4;
+  }
+
+  // Handle instructions in the function.
   vec_for_each(ir_function->instructions, IrInstruction, ir_instr) {
     IrInstruction* ir = iter.ir_instr;
     switch (ir->ty) {
@@ -370,7 +387,60 @@ static x64_Function* convert_function(IrFunction* ir_function) {
                    mov(to_x64_op(ir->r1), to_x64_op(ir->dst)));
         break;
       }
+      case IR_FN_CALL: {
+        int stack_to_dealloc = 0;
+        // adjust stack if we have an odd number of arguments.
+        // The x64 stack must be 16 byte aligned.
+        if (ir->args->len > kNumArgumentRegs && (ir->args->len % 2)) {
+          push_instr(ret->instructions, alloc_stack(8));
+          stack_to_dealloc += 8;
+        }
 
+        // pass first 6 arguments in registers
+        for (size_t i = 0; (i < kNumArgumentRegs) && (i < ir->args->len); i++) {
+          x64_Operand* arg = to_x64_op(vec_get(ir->args, i));
+          x64_Operand* x64_reg = reg(kArgumentRegs[i], 4);
+          push_instr(ret->instructions, mov(arg, x64_reg));
+        }
+
+        // pass remaining arguments onto the stack in reverse.
+        if (ir->args->len > kNumArgumentRegs) {
+          for (size_t i = ir->args->len - 1; i >= kNumArgumentRegs; i--) {
+            x64_Operand* arg = to_x64_op(vec_get(ir->args, i));
+            if (arg->ty == X64_OP_IMM || arg->ty == X64_OP_REG) {
+              push_instr(ret->instructions, instr1(X64_PUSH, arg));
+            } else {
+              x64_Operand* rax = reg(REG_AX, 4);
+              push_instr(ret->instructions, mov(arg, rax));
+              push_instr(ret->instructions, instr1(X64_PUSH, rax));
+            }
+            // must deallocate stack reserved for arguments pushed onto the
+            // stack.
+            stack_to_dealloc += 8;
+          }
+        }
+
+        // Call the function
+        x64_Instruction call = {
+            .ty = X64_CALL,
+            .fn = ir->label,
+        };
+        push_instr(ret->instructions, call);
+
+        // Deallocate stack if necessary.
+        if (stack_to_dealloc) {
+          x64_Instruction dealloc_stack = {
+              .ty = X64_DEALLOC_STACK,
+              .stack = stack_to_dealloc,
+          };
+          push_instr(ret->instructions, dealloc_stack);
+        }
+
+        // Move the return value in RAX to the call's destination.
+        x64_Operand* dst = to_x64_op(ir->dst);
+        push_instr(ret->instructions, mov(reg(REG_AX, 4), dst));
+        break;
+      }
       default:
         panic("Unexpected IR instruction type: %lu", iter.ir_instr->ty);
     }
@@ -379,13 +449,12 @@ static x64_Function* convert_function(IrFunction* ir_function) {
 }
 
 x64_Program* generate_x86(IrProgram* ast_program) {
-  return 0;
-  // x64_Program* x64_prog = calloc(1, sizeof(x64_Program));
-
-  // ReplacePseudoregsReturn ret =
-  //     replace_pseudoregs(convert_function(ast_program->function));
-
-  // x64_prog->function = fixup_instructions(ret.function, ret.stack);
-
-  // return x64_prog;
+  x64_Program* x64_prog = calloc(1, sizeof(x64_Program));
+  x64_prog->functions = vec_new(sizeof(x64_Function));
+  vec_for_each(ast_program->functions, IrFunction, ir_func) {
+    x64_Function* f =
+        fixup_instructions(replace_pseudoregs(convert_function(iter.ir_func)));
+    vec_push(x64_prog->functions, f);
+  }
+  return x64_prog;
 }

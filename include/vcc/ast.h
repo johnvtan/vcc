@@ -11,6 +11,9 @@ typedef struct AstExpr AstExpr;
 // AST type definition
 //
 
+// TODO(me): This feels very wrong. Why am I grouping these types together?
+// Something about figuring out variable and function declarations? A bit
+// unclear.
 typedef struct AstType AstType;
 struct AstType {
   enum {
@@ -42,6 +45,8 @@ typedef enum {
 
 struct AstExpr {
   AstExprType ty;
+
+  // What is ast_type for?
   AstType ast_type;
   union {
     // EXPR_FACT
