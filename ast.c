@@ -83,6 +83,9 @@ struct ParseContext {
   size_t idx;
   bool err;
 
+  // Used to create unique labels within functions.
+  String* curr_fn;
+
   size_t var_count;
   IdentifierScope* scope;  // per block
 
@@ -109,6 +112,10 @@ struct ParseContext {
 
 static inline bool at_top_level(ParseContext* cx) {
   return cx->scope->parent == NULL;
+}
+
+static String* function_unique_label(ParseContext* cx, String* label) {
+  return string_format("%s.%s", cstring(cx->curr_fn), cstring(label));
 }
 
 // Peeks ahead n+1 tokens
@@ -564,7 +571,7 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     s->ty = STMT_GOTO;
 
     Token t = expect(cx, TK_IDENT);
-    s->ident = t.content;
+    s->ident = function_unique_label(cx, t.content);
     vec_push(cx->gone_to_labels, s->ident);
 
     expect(cx, TK_SEMICOLON);
@@ -789,18 +796,23 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     return s;
   }
 
-  // TODO: what if this is the last token?
   if (match(cx, TK_IDENT) && peek_ahead(cx, 1).ty == TK_COLON) {
+    // Handle a label statement
     Token t = consume(cx);
     expect(cx, TK_COLON);
 
-    if (hashmap_get(cx->labels, t.content)) {
+    // labels are unique for function so that there are no duplicate labels across functions afer the IR
+    // is lowered into assembly. Assuming functions are unique in the translation unit, and labels are
+    // unique per function, then all labels should be unique.
+    String* label = function_unique_label(cx, t.content);
+
+    if (hashmap_get(cx->labels, label)) {
       panic("Redeclared label %s", t.content);
     }
-    hashmap_put(cx->labels, t.content, (void*)1);
+    hashmap_put(cx->labels, label, (void*)1);
 
     s->ty = STMT_LABELED;
-    s->labeled.label = t.content;
+    s->labeled.label = label;
     s->labeled.stmt = parse_stmt(cx);
     return s;
   }
@@ -910,6 +922,8 @@ static AstDecl* parse_function(ParseContext* cx) {
     return decl;
   }
 
+  cx->curr_fn = decl->fn.name;
+
   // Handle function body
   if (!match(cx, TK_OPEN_BRACE)) {
     panic("Expected open brace for function body", 1);
@@ -937,6 +951,7 @@ static AstDecl* parse_function(ParseContext* cx) {
     }
   }
 
+  cx->curr_fn = NULL;
   return decl;
 }
 
@@ -996,6 +1011,7 @@ AstProgram* parse_ast(Vec* tokens) {
   };
   ParseContext cx = {
       .tokens = tokens,
+      .curr_fn = NULL,
       .idx = 0,
       .err = false,
       .var_count = 0,

@@ -175,10 +175,10 @@ static x64_Operand* fixup_pseudoreg(Hashmap* h, x64_Operand* operand,
   x64_Operand* stack_operand = hashmap_get(h, operand->pseudo);
 
   if (!stack_operand) {
-    *stack_pos -= 4;
+    *stack_pos += 4;
 
     // allocate a new stack operand if one doesn't exist
-    stack_operand = stack(*stack_pos);
+    stack_operand = stack(*stack_pos * -1);
     hashmap_put(h, operand->pseudo, stack_operand);
   }
   return stack_operand;
@@ -201,13 +201,12 @@ static inline bool stack_to_stack_not_allowed(x64_Instruction* instr) {
 static x64_Function* fixup_instructions(x64_Function* input) {
   x64_Function* ret = function(input->name);
 
-  // TODO: idk how negative % works
-  int pos_stack_size = input->stack_size * -1;
-  if (pos_stack_size % 16) {
-    pos_stack_size += (16 - pos_stack_size % 16);
+  // Round up stack to nearest 16 bytes.
+  if (input->stack_size % 16) {
+    input->stack_size += (16 - input->stack_size % 16);
   }
 
-  push_instr(ret->instructions, alloc_stack(-pos_stack_size));
+  push_instr(ret->instructions, alloc_stack(input->stack_size));
   vec_for_each(input->instructions, x64_Instruction, instr) {
     if (stack_to_stack_not_allowed(iter.instr)) {
       // split up stack->stack ops into
@@ -276,6 +275,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
     if (n < kNumArgumentRegs) {
       arg = reg(kArgumentRegs[n], 4);
     } else {
+      // arguments are always passed as 8 bytes on the stack.
       int stack_offset = (8 * (n - kNumArgumentRegs)) + 16;
       arg = stack(stack_offset);
     }
@@ -283,7 +283,9 @@ static x64_Function* convert_function(IrFunction* ir_function) {
     push_instr(ret->instructions, mov(arg, pseudo(iter.param)));
 
     // TODO: correct sizing.
-    ret->stack_size -= 4;
+    // Note: this size corresponds to the pseudoreg that the argument is moved into,
+    // not the size of the argument passed on the stack (which is always 8 bytes currently).
+    ret->stack_size += 4;
   }
 
   // Handle instructions in the function.
@@ -410,7 +412,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
             if (arg->ty == X64_OP_IMM || arg->ty == X64_OP_REG) {
               push_instr(ret->instructions, instr1(X64_PUSH, arg));
             } else {
-              x64_Operand* rax = reg(REG_AX, 4);
+              x64_Operand* rax = reg(REG_AX, arg->size);
               push_instr(ret->instructions, mov(arg, rax));
               push_instr(ret->instructions, instr1(X64_PUSH, rax));
             }
@@ -423,7 +425,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         // Call the function
         x64_Instruction call = {
             .ty = X64_CALL,
-            .fn = ir->label,
+            .r1 = label_op(ir->label),
         };
         push_instr(ret->instructions, call);
 

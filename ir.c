@@ -401,10 +401,6 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
       };
 
       push_inst(out, ir_fn_call);
-
-      // Always add a return 0 at the end of every function body to ensure
-      // functions always return.
-      push_inst(out, unary_no_dst(IR_RET, constant(0)));
       return dst;
     }
     default:

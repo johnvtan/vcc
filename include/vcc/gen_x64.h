@@ -84,16 +84,13 @@ typedef struct {
     // Used for SETCC, ignored otherwise
     x64_ConditionCode cc;
 
-    // For JMP and LABEL instructions, r1 contains the label
+    // For JMP, LABEL, and CALL instructions, r1 contains the label
     x64_Operand* r1;
     x64_Operand* r2;
   };
 
   // X64_ALLOC_STACK
   int stack;
-
-  // X64_CALL
-  String* fn;
 } x64_Instruction;
 
 typedef struct {

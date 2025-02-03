@@ -25,14 +25,37 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
       break;
     }
     case X64_OP_REG: {
-      static const char* reg_map[] = {
-          [REG_AX] = "eax",
-          [REG_DX] = "edx",
-          [REG_R10] = "r10d",
-          [REG_R11] = "r11d",
-      };
-
-      emit(cx, "%%%s", reg_map[op->reg]);
+      const char* reg_str = NULL;
+      if (op->size == 8) {
+        static const char* reg_map[] = {
+            [REG_AX] = "rax",
+            [REG_DX] = "rdx",
+            [REG_DI] = "rdi",
+            [REG_CX] = "rcx",
+            [REG_SI] = "rsi",
+            [REG_R8] = "r8",
+            [REG_R9] = "r9",
+            [REG_R10] = "r10",
+            [REG_R11] = "r11",
+        };
+        reg_str = reg_map[op->reg];
+      } else if (op->size == 4) {
+        static const char* reg_map[] = {
+            [REG_AX] = "eax",
+            [REG_DX] = "edx",
+            [REG_DI] = "edi",
+            [REG_CX] = "ecx",
+            [REG_SI] = "esi",
+            [REG_R8] = "r8d",
+            [REG_R9] = "r9d",
+            [REG_R10] = "r10d",
+            [REG_R11] = "r11d",
+        };
+        reg_str = reg_map[op->reg];
+      } else {
+        panic("Unexpected reg op size %u", op->size);
+      }
+      emit(cx, "%%%s", reg_str);
       break;
     }
     case X64_OP_STACK: {
@@ -150,11 +173,28 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       emit(cx, "\tsubq $%d, %%rsp\n", inst->stack);
       break;
     }
+    case X64_DEALLOC_STACK: {
+      emit(cx, "\taddq $%d, %%rsp\n", inst->stack);
+      break;
+    }
     case X64_LABEL: {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
       }
       emit_label(cx, inst->r1->label, false, true);
+      break;
+    }
+    case X64_CALL: {
+      if (inst->r1->ty != X64_OP_LABEL) {
+        panic("Expected label operand but got %u", inst->r1->ty);
+      }
+      emit(cx, "\tcall %s\n", cstring(inst->r1->label));
+      break;
+    }
+    case X64_PUSH: {
+      // push always uses 8 byte registers.
+      inst->r1->size = 8;
+      emit1(cx, "pushq", inst->r1);
       break;
     }
     default:
