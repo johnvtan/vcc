@@ -283,8 +283,9 @@ static x64_Function* convert_function(IrFunction* ir_function) {
     push_instr(ret->instructions, mov(arg, pseudo(iter.param)));
 
     // TODO: correct sizing.
-    // Note: this size corresponds to the pseudoreg that the argument is moved into,
-    // not the size of the argument passed on the stack (which is always 8 bytes currently).
+    // Note: this size corresponds to the pseudoreg that the argument is moved
+    // into, not the size of the argument passed on the stack (which is always 8
+    // bytes currently).
     ret->stack_size += 4;
   }
 

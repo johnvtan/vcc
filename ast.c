@@ -65,14 +65,43 @@ static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
 // Note: type checking is handled separately from identifier resolution.
 // The TypeTable is a flat map where each identifier has a unique name.
 //
+
+// Hashmap<String, TypeTableEntry>
 typedef Hashmap TypeTable;
-static AstType* type_table_get(TypeTable* tt, String* unique_name) {
+typedef struct TypeTableEntry {
+  enum {
+    TT_FN,
+    TT_VAR,
+  } ty;
+
+  // TT_VAR
+  CType var_type;
+
+  // TT_FN
+  struct {
+    size_t num_params;
+    bool defined;
+  } fn;
+} TypeTableEntry;
+
+static TypeTableEntry* type_table_get(TypeTable* tt, String* unique_name) {
   return hashmap_get(tt, unique_name);
 }
-static void type_table_put(TypeTable* tt, String* name, AstType* type) {
-  AstType* copy = calloc(1, sizeof(AstType));
-  *copy = *type;
-  hashmap_put(tt, name, copy);
+
+static void type_table_put_var(TypeTable* tt, String* name, CType var_type) {
+  TypeTableEntry* e = calloc(1, sizeof(TypeTableEntry));
+  e->ty = TT_VAR;
+  e->var_type = var_type;
+  hashmap_put(tt, name, e);
+}
+
+static void type_table_put_fn(TypeTable* tt, String* name, size_t num_params,
+                              bool defined) {
+  TypeTableEntry* e = calloc(1, sizeof(TypeTableEntry));
+  e->ty = TT_FN;
+  e->fn.num_params = num_params;
+  e->fn.defined = defined;
+  hashmap_put(tt, name, e);
 }
 
 // This is basically an iterator through the token list.
@@ -167,7 +196,7 @@ static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
     exit(-1);
   }
 
-  if (val->ast_type.ty != TYPE_INT) {
+  if (val->c_type != TYPE_INT) {
     emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
     exit(-1);
   }
@@ -178,9 +207,9 @@ static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
 //
 
 // Parses a type of any expr (i.e., not a function definition).
-static AstType parse_expr_type(ParseContext* cx) {
+static CType parse_expr_type(ParseContext* cx) {
   expect(cx, TK_INT);
-  return (AstType){.ty = TYPE_INT};
+  return TYPE_INT;
 }
 
 //
@@ -192,7 +221,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec);
 static AstExpr* expr(AstExprType ty) {
   AstExpr* e = calloc(1, sizeof(AstExpr));
   e->ty = ty;
-  e->ast_type.ty = TYPE_INT;
+  e->c_type = TYPE_INT;
   return e;
 }
 
@@ -203,7 +232,7 @@ static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
   e->binary.rhs = rhs;
 
   // TODO: typechecking needs to be improved
-  if (lhs->ast_type.ty != TYPE_INT || rhs->ast_type.ty != TYPE_INT) {
+  if (lhs->c_type != TYPE_INT || rhs->c_type != TYPE_INT) {
     panic("binary ops only work on integer types", 1);
   }
   return e;
@@ -237,9 +266,9 @@ static AstExpr* parse_function_call(ParseContext* cx) {
   }
 
   // typecheck function call against declaration
-  AstType* decltype = type_table_get(cx->type_table, r.info->name);
-  assert(decltype);
-  if (decltype->ty != TYPE_FN) {
+  TypeTableEntry* tt_entry = type_table_get(cx->type_table, r.info->name);
+  assert(tt_entry);
+  if (tt_entry->ty != TT_FN) {
     panic("Cannot call non-function", 1);
   }
 
@@ -264,7 +293,7 @@ static AstExpr* parse_function_call(ParseContext* cx) {
   expect(cx, TK_CLOSE_PAREN);
 
   // Verify fn_call has correct number of arguments.
-  if ((size_t) decltype->fn.num_params != e->fn_call.args->len) {
+  if (tt_entry->fn.num_params != e->fn_call.args->len) {
     panic("Mismatching number of parameters to %s", cstring(e->fn_call.ident));
   }
 
@@ -282,11 +311,16 @@ static AstExpr* parse_variable(ParseContext* cx) {
   e->ident = info->name;
 
   // Propagate type into expr
-  AstType* ast_type = type_table_get(cx->type_table, e->ident);
-  if (!ast_type) {
+  TypeTableEntry* tt_entry = type_table_get(cx->type_table, e->ident);
+  if (!tt_entry) {
     panic("Variable %s has no type", cstring(e->ident));
   }
-  e->ast_type = *ast_type;
+
+  if (tt_entry->ty != TT_VAR) {
+    panic("%s is a variable but has a function type", cstring(e->ident));
+  }
+
+  e->c_type = tt_entry->var_type;
   return e;
 }
 
@@ -628,8 +662,8 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     expect(cx, TK_OPEN_PAREN);
     s->switch_.cond = parse_expr(cx, PREC_MIN);
-    AstType* cond_type = &s->switch_.cond->ast_type;
-    if (cond_type->ty != TYPE_INT) {
+    CType cond_type = s->switch_.cond->c_type;
+    if (cond_type != TYPE_INT) {
       panic("Cannot switch on non-integer", 1);
     }
     expect(cx, TK_CLOSE_PAREN);
@@ -801,9 +835,10 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     Token t = consume(cx);
     expect(cx, TK_COLON);
 
-    // labels are unique for function so that there are no duplicate labels across functions afer the IR
-    // is lowered into assembly. Assuming functions are unique in the translation unit, and labels are
-    // unique per function, then all labels should be unique.
+    // labels are unique for function so that there are no duplicate labels
+    // across functions afer the IR is lowered into assembly. Assuming functions
+    // are unique in the translation unit, and labels are unique per function,
+    // then all labels should be unique.
     String* label = function_unique_label(cx, t.content);
 
     if (hashmap_get(cx->labels, label)) {
@@ -835,11 +870,11 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
   }
 
   while (true) {
-    AstType ast_type = parse_expr_type(cx);
+    CType c_type = parse_expr_type(cx);
     Token t = expect(cx, TK_IDENT);
 
     AstFnParam* param = vec_push_empty(param_list);
-    param->ast_type = ast_type;
+    param->c_type = c_type;
 
     if (hashmap_get(ident_map, t.content) != NULL) {
       panic("Parameter %s redeclared", cstring(t.content));
@@ -849,7 +884,8 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
         string_format("%s.%u", cstring(t.content), cx->var_count++);
     hashmap_put(ident_map, t.content,
                 new_ident_info(unique_var_name, NO_LINKAGE));
-    type_table_put(cx->type_table, unique_var_name, &ast_type);
+
+    type_table_put_var(cx->type_table, unique_var_name, c_type);
 
     param->ident = unique_var_name;
 
@@ -890,10 +926,16 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
   }
 
   // typecheck the declaration
-  AstType* declared_type = type_table_get(cx->type_table, decl->fn.name);
+  TypeTableEntry* declared_type = type_table_get(cx->type_table, decl->fn.name);
   size_t num_params = decl->fn.params->len;
   if (declared_type) {
-    if ((size_t)declared_type->fn.num_params != num_params) {
+    if (declared_type->ty != TT_FN) {
+      panic(
+          "Found function declaration for ident %s but previously declared as "
+          "a variable.",
+          cstring(decl->fn.name));
+    }
+    if (declared_type->fn.num_params != num_params) {
       panic(
           "Function declaration %s conflicts with mismatching parameter list. "
           "Expected %d but got %d parameters.",
@@ -902,13 +944,7 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
     }
   } else {
     // declared type doesn't exist in type table, so insert
-    AstType ast_type = {
-        .ty = TYPE_FN,
-        .fn = {
-            .num_params = num_params,
-            .defined = false,  // it didn't exist before so it can't be defined.
-        }};
-    type_table_put(cx->type_table, decl->fn.name, &ast_type);
+    type_table_put_fn(cx->type_table, decl->fn.name, num_params, false);
   }
 
   return decl;
@@ -932,12 +968,18 @@ static AstDecl* parse_function(ParseContext* cx) {
     panic("Nested function definition not allowed", 1);
   }
 
-  AstType* decltype = type_table_get(cx->type_table, decl->fn.name);
-  assert(decltype);
-  if (decltype->fn.defined) {
+  TypeTableEntry* tt_entry = type_table_get(cx->type_table, decl->fn.name);
+  assert(tt_entry);
+  if (tt_entry->ty != TT_FN) {
+    panic(
+        "Found function declaration for %s, but previously declared as "
+        "variable.",
+        cstring(decl->fn.name));
+  }
+  if (tt_entry->fn.defined) {
     panic("Function %s redeclared", cstring(decl->fn.name));
   }
-  decltype->fn.defined = true;
+  tt_entry->fn.defined = true;
 
   cx->labels = hashmap_new();
   cx->gone_to_labels = vec_new(sizeof(String));
@@ -956,7 +998,7 @@ static AstDecl* parse_function(ParseContext* cx) {
 }
 
 static AstDecl* parse_variable_decl(ParseContext* cx) {
-  AstType var_type = parse_expr_type(cx);  // put in symbol table
+  CType var_type = parse_expr_type(cx);  // put in symbol table
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_VAR;
@@ -974,9 +1016,10 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
 
   hashmap_put(cx->scope->map, t.content,
               new_ident_info(unique_var_name, NO_LINKAGE));
-  assert(var_type.ty == TYPE_INT);
+  assert(var_type == TYPE_INT);
   decl->var.name = unique_var_name;
-  type_table_put(cx->type_table, unique_var_name, &var_type);
+
+  type_table_put_var(cx->type_table, unique_var_name, var_type);
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
@@ -988,7 +1031,7 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
     var->ident = decl->var.name;
 
     decl->var.init = expr_binary(BINARY_ASSIGN, var, init_expr);
-    if (decl->var.init->ast_type.ty != TYPE_INT) {
+    if (decl->var.init->c_type != TYPE_INT) {
       panic("Expected integer expression for variable init", 1);
     }
   }

@@ -11,24 +11,9 @@ typedef struct AstExpr AstExpr;
 // AST type definition
 //
 
-// TODO(me): This feels very wrong. Why am I grouping these types together?
-// Something about figuring out variable and function declarations? A bit
-// unclear.
-typedef struct AstType AstType;
-struct AstType {
-  enum {
-    TYPE_INT,
-    TYPE_FN,
-  } ty;
-
-  union {
-    // TYPE_FN
-    struct {
-      int num_params;
-      bool defined;
-    } fn;
-  };
-};
+typedef enum CType {
+  TYPE_INT,
+} CType;
 
 //
 // AST expression definition
@@ -44,10 +29,13 @@ typedef enum {
 } AstExprType;
 
 struct AstExpr {
+  // The AST type of the expression.
+  // This determines which union variant to use.
   AstExprType ty;
 
-  // What is ast_type for?
-  AstType ast_type;
+  // The C type of the expression.
+  CType c_type;
+
   union {
     // EXPR_FACT
     int int_const;
@@ -117,7 +105,7 @@ struct AstExpr {
 };
 
 typedef struct AstFnParam {
-  AstType ast_type;
+  CType c_type;
   String* ident;
 } AstFnParam;
 
