@@ -109,6 +109,12 @@ typedef struct AstFnParam {
   String* ident;
 } AstFnParam;
 
+typedef enum StorageClass {
+  SC_NONE,
+  SC_STATIC,
+  SC_EXTERN,
+} StorageClass;
+
 typedef struct {
   enum {
     AST_DECL_VAR,
@@ -119,6 +125,7 @@ typedef struct {
     struct {
       String* name;
       AstExpr* init;
+      StorageClass storage_class;
     } var;
 
     struct {
@@ -129,6 +136,7 @@ typedef struct {
 
       // Vec<AstBlockItem>
       Vec* body;
+      StorageClass storage_class;
     } fn;
   };
 } AstDecl;

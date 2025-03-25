@@ -206,10 +206,86 @@ static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
 // AST type parsing
 //
 
-// Parses a type of any expr (i.e., not a function definition).
-static CType parse_expr_type(ParseContext* cx) {
-  expect(cx, TK_INT);
-  return TYPE_INT;
+static bool is_type_specifier(TokenType t) {
+  switch (t) {
+    case TK_INT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static CType to_type_specifier(TokenType t) {
+  switch (t) {
+    case TK_INT:
+      return TYPE_INT;
+    default:
+      panic("invalid TokenType %d for to_type_specifier", t);
+  }
+}
+
+static bool is_storage_class(TokenType t) {
+  switch (t) {
+    case TK_STATIC:
+    case TK_EXTERN:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static StorageClass to_storage_class(TokenType t) {
+  switch (t) {
+    case TK_STATIC:
+      return SC_STATIC;
+    case TK_EXTERN:
+      return SC_EXTERN;
+    default:
+      panic("invalid TokenType %d for to_storage_class", t);
+  }
+}
+
+typedef struct {
+  CType c_type;
+  StorageClass storage_class;
+} ParsedSpecifiers;
+
+static ParsedSpecifiers parse_specifiers(ParseContext* cx) {
+  Vec* c_types = vec_new(sizeof(CType));
+  Vec* storage_classes = vec_new(sizeof(StorageClass));
+
+  while (true) {
+    TokenType ty = peek(cx).ty;
+    if (is_type_specifier(ty)) {
+      // TODO: actually convert type specifier
+      consume(cx);
+      CType c_type = to_type_specifier(ty);
+      vec_push(c_types, (void*)&c_type);
+    } else if (is_storage_class(ty)) {
+      consume(cx);
+      StorageClass sc = to_storage_class(ty);
+      vec_push(storage_classes, &sc);
+    } else {
+      break;
+    }
+  }
+
+  if (c_types->len != 1) {
+    panic("Invalid type specifiers: %u", c_types->len);
+  }
+
+  if (storage_classes->len > 1) {
+    panic("Invalid storage classes: %u", storage_classes->len);
+  }
+
+  ParsedSpecifiers specs;
+  specs.c_type = *(CType*)vec_get(c_types, 0);
+  specs.storage_class = SC_NONE;
+  if (storage_classes->len) {
+    specs.storage_class = *(StorageClass*)vec_get(storage_classes, 0);
+  }
+
+  return specs;
 }
 
 //
@@ -870,11 +946,14 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
   }
 
   while (true) {
-    CType c_type = parse_expr_type(cx);
-    Token t = expect(cx, TK_IDENT);
+    ParsedSpecifiers specs = parse_specifiers(cx);
+    if (specs.storage_class == SC_STATIC) {
+      panic("static not allowed in fn parameter", 1);
+    }
 
+    Token t = expect(cx, TK_IDENT);
     AstFnParam* param = vec_push_empty(param_list);
-    param->c_type = c_type;
+    param->c_type = specs.c_type;
 
     if (hashmap_get(ident_map, t.content) != NULL) {
       panic("Parameter %s redeclared", cstring(t.content));
@@ -885,7 +964,7 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
     hashmap_put(ident_map, t.content,
                 new_ident_info(unique_var_name, NO_LINKAGE));
 
-    type_table_put_var(cx->type_table, unique_var_name, c_type);
+    type_table_put_var(cx->type_table, unique_var_name, specs.c_type);
 
     param->ident = unique_var_name;
 
@@ -900,15 +979,15 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
 }
 
 static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
-  parse_expr_type(cx);
+  ParsedSpecifiers specs = parse_specifiers(cx);
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_FN;
-  decl->fn.params = vec_new(sizeof(AstFnParam));
 
   Token t = expect(cx, TK_IDENT);
   decl->fn.name = t.content;
   decl->fn.params = parse_parameter_list(cx, ident_map);
+  decl->fn.storage_class = specs.storage_class;
 
   ResolvedIdentifier resolved = resolve_identifier(cx->scope, decl->fn.name);
   if (resolved.info) {
@@ -998,7 +1077,7 @@ static AstDecl* parse_function(ParseContext* cx) {
 }
 
 static AstDecl* parse_variable_decl(ParseContext* cx) {
-  CType var_type = parse_expr_type(cx);  // put in symbol table
+  ParsedSpecifiers specs = parse_specifiers(cx);
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_VAR;
@@ -1016,10 +1095,10 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
 
   hashmap_put(cx->scope->map, t.content,
               new_ident_info(unique_var_name, NO_LINKAGE));
-  assert(var_type == TYPE_INT);
+  assert(specs.c_type == TYPE_INT);
   decl->var.name = unique_var_name;
-
-  type_table_put_var(cx->type_table, unique_var_name, var_type);
+  decl->var.storage_class = specs.storage_class;
+  type_table_put_var(cx->type_table, unique_var_name, specs.c_type);
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);

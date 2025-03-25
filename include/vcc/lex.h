@@ -54,6 +54,9 @@ typedef enum {
   TK_DEFAULT,
   TK_COMMA,
 
+  TK_STATIC,
+  TK_EXTERN,
+
   TK_IDENT,
   TK_NUM_CONST,
 } TokenType;

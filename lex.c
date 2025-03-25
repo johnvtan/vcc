@@ -58,6 +58,8 @@ static KeywordMatch KEYWORD_MATCHES[] = {
     {TK_CASE, "case"},
     {TK_DEFAULT, "default"},
     {TK_COMMA, ","},
+    {TK_STATIC, "static"},
+    {TK_EXTERN, "extern"},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
