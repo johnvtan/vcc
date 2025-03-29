@@ -122,11 +122,19 @@ typedef struct {
     AST_DECL_FN,
   } ty;
 
+  StorageClass storage_class;
   union {
     struct {
+      enum {
+        VAR_LOCAL,
+        VAR_STATIC,
+      } ty;
+
       String* name;
+      CType c_type;
+
+      // Tentatively declared variables should be initialized to 0.
       AstExpr* init;
-      StorageClass storage_class;
     } var;
 
     struct {
@@ -137,7 +145,6 @@ typedef struct {
 
       // Vec<AstBlockItem>
       Vec* body;
-      StorageClass storage_class;
     } fn;
   };
 } AstDecl;
@@ -247,19 +254,45 @@ struct AstStmt {
 };
 
 typedef struct {
+  CType c_type;
+  bool global;
+  struct {
+    enum {
+      // NOTE: this is ordered by priority. INIT_NONE is lowest priority.
+      // Ensure that priority is maintatined in this definition.
+      INIT_NONE = 0,
+      INIT_TENTATIVE = 1,
+      INIT_HAS_VALUE = 2,
+    } ty;
+
+    // INIT_HAS_VALUE
+    int val;
+  } init;
+} StaticVariableSymbol;
+
+typedef struct {
   enum {
-    ST_VAR,
+    ST_STATIC_VAR,
+    ST_LOCAL_VAR,
     ST_FN,
   } ty;
-
-  // ST_VAR
-  CType var_type;
 
   // ST_FN
   struct {
     size_t num_params;
     bool defined;
+
+    // visibility
+    bool global;
   } fn;
+
+  // ST_STATIC_VAR
+  StaticVariableSymbol static_;
+
+  // ST_LOCAL_VAR
+  struct {
+    CType c_type;
+  } local;
 } SymbolTableEntry;
 
 typedef struct {

@@ -563,12 +563,11 @@ static void gen_decl(AstDecl* decl, Vec* out) {
     return;
   }
 
-  if (decl->var.init->ty != EXPR_BINARY &&
-      decl->var.init->binary.op != BINARY_ASSIGN) {
-    panic("Invalid init decl expr ty %u", decl->var.init->ty);
-  }
-
-  gen_assign(decl->var.init, out);
+  // Fake assignment here.
+  // TODO: different for static variables.
+  IrVal* lhs = var(decl->var.name);
+  IrVal* rhs = gen_expr(decl->var.init, out);
+  push_inst(out, copy(rhs, lhs));
 }
 
 static void gen_block_item(AstBlockItem* block_item, Vec* out) {
