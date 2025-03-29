@@ -16,12 +16,15 @@ static AstStmt* parse_stmt(ParseContext* cx);
 // Parsing Context definition
 //
 
+//
 // Identifier resolution
+//
+// The purpose of identifier resolution is to map from the name of an identifier
+// in source code to the unique name (possibly) generated during parsing.
 typedef struct IdentifierScope IdentifierScope;
 typedef struct IdentifierInfo {
-  // Internal name, could be different from the key
-  // This should be a unique name that can be used
-  // as the key to the TypeTable.
+  // Internal unique name, could be different from the key
+  // This is the name that is used as the index in SymbolTable.
   String* name;
 
   enum {
@@ -60,48 +63,21 @@ static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
   return (ResolvedIdentifier){NULL, false};
 }
 
-//
-// Type checking
-// Note: type checking is handled separately from identifier resolution.
-// The TypeTable is a flat map where each identifier has a unique name.
-//
-
-// Hashmap<String, TypeTableEntry>
-typedef Hashmap TypeTable;
-typedef struct TypeTableEntry {
-  enum {
-    TT_FN,
-    TT_VAR,
-  } ty;
-
-  // TT_VAR
-  CType var_type;
-
-  // TT_FN
-  struct {
-    size_t num_params;
-    bool defined;
-  } fn;
-} TypeTableEntry;
-
-static TypeTableEntry* type_table_get(TypeTable* tt, String* unique_name) {
-  return hashmap_get(tt, unique_name);
-}
-
-static void type_table_put_var(TypeTable* tt, String* name, CType var_type) {
-  TypeTableEntry* e = calloc(1, sizeof(TypeTableEntry));
-  e->ty = TT_VAR;
+static void symbol_table_put_var(SymbolTable* st, String* name,
+                                 CType var_type) {
+  SymbolTableEntry* e = calloc(1, sizeof(SymbolTableEntry));
+  e->ty = ST_VAR;
   e->var_type = var_type;
-  hashmap_put(tt, name, e);
+  hashmap_put(st->map, name, e);
 }
 
-static void type_table_put_fn(TypeTable* tt, String* name, size_t num_params,
-                              bool defined) {
-  TypeTableEntry* e = calloc(1, sizeof(TypeTableEntry));
-  e->ty = TT_FN;
+static void symbol_table_put_fn(SymbolTable* st, String* name,
+                                size_t num_params, bool defined) {
+  SymbolTableEntry* e = calloc(1, sizeof(SymbolTableEntry));
+  e->ty = ST_FN;
   e->fn.num_params = num_params;
   e->fn.defined = defined;
-  hashmap_put(tt, name, e);
+  hashmap_put(st->map, name, e);
 }
 
 // This is basically an iterator through the token list.
@@ -119,7 +95,7 @@ struct ParseContext {
   IdentifierScope* scope;  // per block
 
   // global -- each identifier should use its unique name.
-  TypeTable* type_table;
+  SymbolTable* symbol_table;
 
   // defined labels
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
@@ -342,9 +318,9 @@ static AstExpr* parse_function_call(ParseContext* cx) {
   }
 
   // typecheck function call against declaration
-  TypeTableEntry* tt_entry = type_table_get(cx->type_table, r.info->name);
-  assert(tt_entry);
-  if (tt_entry->ty != TT_FN) {
+  SymbolTableEntry* st_entry = hashmap_get(cx->symbol_table->map, r.info->name);
+  assert(st_entry);
+  if (st_entry->ty != ST_FN) {
     panic("Cannot call non-function", 1);
   }
 
@@ -369,7 +345,7 @@ static AstExpr* parse_function_call(ParseContext* cx) {
   expect(cx, TK_CLOSE_PAREN);
 
   // Verify fn_call has correct number of arguments.
-  if (tt_entry->fn.num_params != e->fn_call.args->len) {
+  if (st_entry->fn.num_params != e->fn_call.args->len) {
     panic("Mismatching number of parameters to %s", cstring(e->fn_call.ident));
   }
 
@@ -387,16 +363,16 @@ static AstExpr* parse_variable(ParseContext* cx) {
   e->ident = info->name;
 
   // Propagate type into expr
-  TypeTableEntry* tt_entry = type_table_get(cx->type_table, e->ident);
-  if (!tt_entry) {
+  SymbolTableEntry* st_entry = hashmap_get(cx->symbol_table->map, e->ident);
+  if (!st_entry) {
     panic("Variable %s has no type", cstring(e->ident));
   }
 
-  if (tt_entry->ty != TT_VAR) {
+  if (st_entry->ty != ST_VAR) {
     panic("%s is a variable but has a function type", cstring(e->ident));
   }
 
-  e->c_type = tt_entry->var_type;
+  e->c_type = st_entry->var_type;
   return e;
 }
 
@@ -964,7 +940,7 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
     hashmap_put(ident_map, t.content,
                 new_ident_info(unique_var_name, NO_LINKAGE));
 
-    type_table_put_var(cx->type_table, unique_var_name, specs.c_type);
+    symbol_table_put_var(cx->symbol_table, unique_var_name, specs.c_type);
 
     param->ident = unique_var_name;
 
@@ -978,6 +954,12 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
   return param_list;
 }
 
+// Parses the function signature with |ident_map|. This |ident_map| should
+// be used to create the scope for the body, since the scope is shared for
+// for function parameters and the body.
+//
+// NOTE: cx->scope still points to the scope in which the function is declared.
+// It is essentially the parent of the scope that contains |ident_map|.
 static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
   ParsedSpecifiers specs = parse_specifiers(cx);
 
@@ -1005,10 +987,11 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
   }
 
   // typecheck the declaration
-  TypeTableEntry* declared_type = type_table_get(cx->type_table, decl->fn.name);
+  SymbolTableEntry* declared_type =
+      hashmap_get(cx->symbol_table->map, decl->fn.name);
   size_t num_params = decl->fn.params->len;
   if (declared_type) {
-    if (declared_type->ty != TT_FN) {
+    if (declared_type->ty != ST_FN) {
       panic(
           "Found function declaration for ident %s but previously declared as "
           "a variable.",
@@ -1023,7 +1006,7 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
     }
   } else {
     // declared type doesn't exist in type table, so insert
-    type_table_put_fn(cx->type_table, decl->fn.name, num_params, false);
+    symbol_table_put_fn(cx->symbol_table, decl->fn.name, num_params, false);
   }
 
   return decl;
@@ -1047,18 +1030,19 @@ static AstDecl* parse_function(ParseContext* cx) {
     panic("Nested function definition not allowed", 1);
   }
 
-  TypeTableEntry* tt_entry = type_table_get(cx->type_table, decl->fn.name);
-  assert(tt_entry);
-  if (tt_entry->ty != TT_FN) {
+  SymbolTableEntry* st_entry =
+      hashmap_get(cx->symbol_table->map, decl->fn.name);
+  assert(st_entry);
+  if (st_entry->ty != ST_FN) {
     panic(
         "Found function declaration for %s, but previously declared as "
         "variable.",
         cstring(decl->fn.name));
   }
-  if (tt_entry->fn.defined) {
+  if (st_entry->fn.defined) {
     panic("Function %s redeclared", cstring(decl->fn.name));
   }
-  tt_entry->fn.defined = true;
+  st_entry->fn.defined = true;
 
   cx->labels = hashmap_new();
   cx->gone_to_labels = vec_new(sizeof(String));
@@ -1098,7 +1082,7 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
   assert(specs.c_type == TYPE_INT);
   decl->var.name = unique_var_name;
   decl->var.storage_class = specs.storage_class;
-  type_table_put_var(cx->type_table, unique_var_name, specs.c_type);
+  symbol_table_put_var(cx->symbol_table, unique_var_name, specs.c_type);
 
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
@@ -1131,6 +1115,10 @@ AstProgram* parse_ast(Vec* tokens) {
       .map = hashmap_new(),
       .parent = NULL,
   };
+
+  SymbolTable* symbol_table = calloc(1, sizeof(SymbolTable));
+  symbol_table->map = hashmap_new();
+
   ParseContext cx = {
       .tokens = tokens,
       .curr_fn = NULL,
@@ -1142,11 +1130,12 @@ AstProgram* parse_ast(Vec* tokens) {
       .break_stack = vec_new(sizeof(String*)),
       .continue_stack = vec_new(sizeof(String*)),
       .case_stack = vec_new(sizeof(Vec*)),
-      .type_table = hashmap_new(),
+      .symbol_table = symbol_table,
   };
 
   AstProgram* prog = calloc(1, sizeof(AstProgram));
   prog->decls = vec_new(sizeof(AstDecl));
+  prog->symbol_table = symbol_table;
 
   while (cx.idx < cx.tokens->len) {
     AstDecl* decl = parse_decl(&cx);

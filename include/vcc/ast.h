@@ -1,6 +1,7 @@
 #ifndef VCC_AST_H
 #define VCC_AST_H
 
+#include <vcc/hashmap.h>
 #include <vcc/string.h>
 #include <vcc/vec.h>
 
@@ -246,8 +247,38 @@ struct AstStmt {
 };
 
 typedef struct {
+  enum {
+    ST_VAR,
+    ST_FN,
+  } ty;
+
+  // ST_VAR
+  CType var_type;
+
+  // ST_FN
+  struct {
+    size_t num_params;
+    bool defined;
+  } fn;
+} SymbolTableEntry;
+
+typedef struct {
+  // |map| is a flat map containing every symbol in the program.
+  //
+  // The parsing stage guarantees that every symbol in the program has a
+  // unique name, which is used as the index into this map. AST nodes with
+  // identifiers (like variable and function declarations) will contain the
+  // unique name for those identifiers, which can be used to index into this
+  // table to get more information about the type of that symbol.
+  //
+  // Hashmap<String, SymbolTableEntry>
+  Hashmap* map;
+} SymbolTable;
+
+typedef struct {
   // Vec<AstDecl>
   Vec* decls;
+  SymbolTable* symbol_table;
 } AstProgram;
 
 AstProgram* parse_ast(Vec* token);
