@@ -8,7 +8,8 @@
 // Forward declarations
 //
 typedef struct ParseContext ParseContext;
-static AstDecl* parse_variable_decl(ParseContext* cx);
+typedef struct ParsedSpecifiers ParsedSpecifiers;
+static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs);
 static AstDecl* parse_decl(ParseContext* cx);
 static AstStmt* parse_stmt(ParseContext* cx);
 
@@ -211,7 +212,7 @@ static StorageClass to_storage_class(TokenType t) {
   }
 }
 
-typedef struct {
+typedef struct ParsedSpecifiers {
   CType c_type;
   StorageClass storage_class;
 } ParsedSpecifiers;
@@ -221,15 +222,16 @@ static ParsedSpecifiers parse_specifiers(ParseContext* cx) {
   Vec* storage_classes = vec_new(sizeof(StorageClass));
 
   while (true) {
-    TokenType ty = peek(cx).ty;
-    if (is_type_specifier(ty)) {
-      // TODO: actually convert type specifier
+    Token t = peek(cx);
+    if (is_type_specifier(t.ty)) {
+      // emit_error_no_pos("Found type spec %s", cstring(t.content));
       consume(cx);
-      CType c_type = to_type_specifier(ty);
+      CType c_type = to_type_specifier(t.ty);
       vec_push(c_types, (void*)&c_type);
-    } else if (is_storage_class(ty)) {
+    } else if (is_storage_class(t.ty)) {
+      // emit_error_no_pos("Found type spec %s", cstring(t.content));
       consume(cx);
-      StorageClass sc = to_storage_class(ty);
+      StorageClass sc = to_storage_class(t.ty);
       vec_push(storage_classes, &sc);
     } else {
       break;
@@ -579,7 +581,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
 
 static void parse_block_item(ParseContext* cx, Vec* out) {
   AstBlockItem* b = vec_push_empty(out);
-  if (peek(cx).ty == TK_INT) {
+  if (is_type_specifier(peek(cx).ty) || is_storage_class(peek(cx).ty)) {
     b->ty = BLOCK_DECL;
     b->decl = parse_decl(cx);
   } else {
@@ -846,9 +848,10 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     if (match(cx, TK_SEMICOLON)) {
       s->for_.init.ty = FOR_INIT_NONE;
       consume(cx);
-    } else if (match(cx, TK_INT)) {
+    } else if (is_type_specifier(peek(cx).ty)) {
       s->for_.init.ty = FOR_INIT_DECL;
-      s->for_.init.decl = parse_variable_decl(cx);  // consumes semicolon
+      s->for_.init.decl =
+          parse_variable_decl(cx, parse_specifiers(cx));  // consumes semicolon
       if (s->for_.init.decl->ty != AST_DECL_VAR) {
         panic("Only variable declarations allowed in for init", 1);
       }
@@ -917,18 +920,20 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
 
   while (true) {
     ParsedSpecifiers specs = parse_specifiers(cx);
-    if (specs.storage_class == SC_STATIC) {
-      panic("static not allowed in fn parameter", 1);
+    Token t = expect(cx, TK_IDENT);
+    if (specs.storage_class != SC_NONE) {
+      panic("Function params must be non static non extern, %s",
+            cstring(t.content));
     }
 
-    Token t = expect(cx, TK_IDENT);
     AstFnParam* param = vec_push_empty(param_list);
     param->c_type = specs.c_type;
 
     if (hashmap_get(ident_map, t.content) != NULL) {
-      panic("Parameter %s redeclared", cstring(t.content));
+      panic("Function parameter %s redeclared", cstring(t.content));
     }
 
+    // Update identifier resolution and symbol table with function parameters.
     String* unique_var_name =
         string_format("%s.%u", cstring(t.content), cx->var_count++);
     hashmap_put(ident_map, t.content,
@@ -1009,8 +1014,8 @@ static void typecheck_function_signature(SymbolTable* symbol_table,
 //
 // NOTE: cx->scope still points to the scope in which the function is declared.
 // It is essentially the parent of the scope that contains |ident_map|.
-static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
-  ParsedSpecifiers specs = parse_specifiers(cx);
+static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map,
+                                         ParsedSpecifiers specs) {
   Token t = expect(cx, TK_IDENT);  // t should contain the function's name.
 
   // Disallow static functions declared at block scope.
@@ -1046,9 +1051,9 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map) {
   return decl;
 }
 
-static AstDecl* parse_function(ParseContext* cx) {
+static AstDecl* parse_function(ParseContext* cx, ParsedSpecifiers specs) {
   Hashmap* ident_map = hashmap_new();
-  AstDecl* decl = parse_function_signature(cx, ident_map);
+  AstDecl* decl = parse_function_signature(cx, ident_map, specs);
   if (match(cx, TK_SEMICOLON)) {
     // Just a function signature, no body.
     consume(cx);
@@ -1204,14 +1209,24 @@ static void typecheck_local_variable_decl(SymbolTable* symbol_table,
     return;
   }
 
+  // local variables (both static and other) should have unique names
+  // with no previous entries in the symbol table by this point.
+  assert(!st_entry);
   if (decl->storage_class == SC_STATIC) {
+    SymbolTableEntry new_entry = {.ty = ST_STATIC_VAR,
+                                  .static_ = {.c_type = decl->var.c_type,
+                                              .global = false,
+                                              .init = {
+                                                  .ty = INIT_HAS_VALUE,
+                                                  .val = 0,
+                                              }}};
+    symbol_table_put(symbol_table, decl->var.name, new_entry);
     return;
   }
 
   // local variable with no storage class.
   // local variables should have a unique name, meaning that no previous symbol
   // table entry should exist.
-  assert(!st_entry);
   SymbolTableEntry new_entry = {.ty = ST_LOCAL_VAR,
                                 .local = {
                                     .c_type = decl->var.c_type,
@@ -1234,6 +1249,19 @@ static void typecheck_variable_decl_with_init(ParseContext* cx, AstDecl* decl) {
       panic("Initializer for extern variable %s not allowed",
             cstring(decl->var.name));
     }
+
+    if (decl->storage_class == SC_STATIC && decl->var.init) {
+      if (decl->var.init->ty != EXPR_INT_CONST) {
+        panic(
+            "Static block scope variables must have int constant initializers "
+            "but found %d",
+            decl->var.init->ty);
+      }
+      st_entry->static_.init.val = decl->var.init->int_const;
+    }
+
+    // non-static local variables don't have an init field in the symbol table,
+    // so ignore them.
     return;
   }
 
@@ -1275,8 +1303,7 @@ static void typecheck_variable_decl_with_init(ParseContext* cx, AstDecl* decl) {
   }
 }
 
-static AstDecl* parse_variable_decl(ParseContext* cx) {
-  ParsedSpecifiers specs = parse_specifiers(cx);
+static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
   assert(specs.c_type == TYPE_INT);  // TODO: more types.
 
   Token t = expect(cx, TK_IDENT);
@@ -1314,10 +1341,11 @@ static AstDecl* parse_variable_decl(ParseContext* cx) {
 }
 
 static AstDecl* parse_decl(ParseContext* cx) {
-  if (peek_ahead(cx, 2).ty == TK_OPEN_PAREN) {
-    return parse_function(cx);
+  ParsedSpecifiers specs = parse_specifiers(cx);
+  if (peek_ahead(cx, 1).ty == TK_OPEN_PAREN) {
+    return parse_function(cx, specs);
   }
-  return parse_variable_decl(cx);
+  return parse_variable_decl(cx, specs);
 }
 
 AstProgram* parse_ast(Vec* tokens) {
