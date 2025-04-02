@@ -578,11 +578,16 @@ static void gen_block_item(AstBlockItem* block_item, Vec* out) {
   }
 }
 
-static IrFunction* gen_function(AstDecl* ast_function) {
+static IrFunction* gen_function(AstDecl* ast_function, SymbolTable* st) {
   IrFunction* ir_function = calloc(1, sizeof(IrFunction));
   ir_function->instructions = vec_new(sizeof(IrInstruction));
   ir_function->name = ast_function->fn.name;
   ir_function->params = vec_new(sizeof(String));
+
+  SymbolTableEntry* st_entry = hashmap_get(st->map, ast_function->fn.name);
+  assert(st_entry && st_entry->ty == ST_FN);
+  ir_function->global = st_entry->fn.global;
+
   vec_for_each(ast_function->fn.params, AstFnParam, param) {
     vec_push(ir_function->params, iter.param->ident);
   }
@@ -595,6 +600,28 @@ static IrFunction* gen_function(AstDecl* ast_function) {
   return ir_function;
 }
 
+IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
+  SymbolTableEntry* st_entry = hashmap_get(st->map, var);
+  assert(st_entry);
+  if (st_entry->ty != ST_STATIC_VAR) {
+    return NULL;
+  }
+  if (st_entry->static_.init.ty == INIT_NONE) {
+    return NULL;
+  }
+
+  // have static variable with initializer.
+  IrStaticVariable* ir_static_variable = calloc(1, sizeof(IrStaticVariable));
+  ir_static_variable->name = var;
+  ir_static_variable->global = st_entry->static_.global;
+  if (st_entry->static_.init.ty == INIT_HAS_VALUE) {
+    ir_static_variable->init = st_entry->static_.init.val;
+  }
+  // if INIT_TENTATIVE, init will be 0 because ir_static_variable is calloc'd.
+
+  return ir_static_variable;
+}
+
 IrProgram* gen_ir(AstProgram* ast_program) {
   IrProgram* ir_program = calloc(1, sizeof(IrProgram));
   ir_program->functions = vec_new(sizeof(IrFunction));
@@ -602,8 +629,18 @@ IrProgram* gen_ir(AstProgram* ast_program) {
     if (iter.decl->ty != AST_DECL_FN || iter.decl->fn.body == NULL) {
       continue;
     }
-    IrFunction* f = gen_function(iter.decl);
+    IrFunction* f = gen_function(iter.decl, ast_program->symbol_table);
     vec_push(ir_program->functions, f);
+  }
+
+  ir_program->static_variables = vec_new(sizeof(IrStaticVariable));
+  vec_for_each(ast_program->symbol_table->symbols, String, symbol) {
+    String* symbol = iter.symbol;
+    IrStaticVariable* static_variable =
+        gen_static_variable(symbol, ast_program->symbol_table);
+    if (static_variable) {
+      vec_push(ir_program->static_variables, static_variable);
+    }
   }
   return ir_program;
 }

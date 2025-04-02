@@ -306,6 +306,10 @@ typedef struct {
   //
   // Hashmap<String, SymbolTableEntry>
   Hashmap* map;
+
+  // List of all the symbol names in the table.
+  // Vec<String>
+  Vec* symbols;
 } SymbolTable;
 
 typedef struct {

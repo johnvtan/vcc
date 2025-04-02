@@ -67,6 +67,7 @@ static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
 static void symbol_table_put(SymbolTable* st, String* name,
                              SymbolTableEntry e) {
   SymbolTableEntry* copy = calloc(1, sizeof(SymbolTableEntry));
+  vec_push(st->symbols, name);
   *copy = e;
   hashmap_put(st->map, name, copy);
 }
@@ -1356,6 +1357,7 @@ AstProgram* parse_ast(Vec* tokens) {
 
   SymbolTable* symbol_table = calloc(1, sizeof(SymbolTable));
   symbol_table->map = hashmap_new();
+  symbol_table->symbols = vec_new(sizeof(String));
 
   ParseContext cx = {
       .tokens = tokens,

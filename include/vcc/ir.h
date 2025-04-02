@@ -68,11 +68,22 @@ typedef struct {
 
   // Vec<IrInstruction>
   Vec* instructions;
+
+  bool global;
 } IrFunction;
+
+typedef struct {
+  String* name;
+  bool global;
+  int init;
+} IrStaticVariable;
 
 typedef struct {
   // Vec<IrFunction>
   Vec* functions;
+
+  // Vec<IrStaticVariable>
+  Vec* static_variables;
 } IrProgram;
 
 IrProgram* gen_ir(AstProgram* program);
