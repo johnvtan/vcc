@@ -84,6 +84,7 @@ typedef struct {
 
   // Vec<IrStaticVariable>
   Vec* static_variables;
+  SymbolTable* symbol_table;
 } IrProgram;
 
 IrProgram* gen_ir(AstProgram* program);

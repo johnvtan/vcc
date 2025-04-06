@@ -51,7 +51,7 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
       break;
     }
     case X64_OP_LABEL: {
-      emit(cx, ".L%s", cstring(op->label));
+      emit(cx, ".L%s", cstring(op->ident));
       break;
     }
     default:
@@ -169,14 +169,14 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
       }
-      emit_label(cx, inst->r1->label, false, true);
+      emit_label(cx, inst->r1->ident, false, true);
       break;
     }
     case X64_CALL: {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
       }
-      emit(cx, "\tcall %s\n", cstring(inst->r1->label));
+      emit(cx, "\tcall %s\n", cstring(inst->r1->ident));
       break;
     }
     case X64_PUSH: {

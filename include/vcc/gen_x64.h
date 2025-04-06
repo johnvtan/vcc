@@ -11,6 +11,7 @@ typedef enum {
   X64_OP_PSEUDO,
   X64_OP_STACK,
   X64_OP_LABEL,
+  X64_OP_DATA,
 } x64_OperandType;
 
 typedef enum {
@@ -39,8 +40,8 @@ typedef struct {
   // X64_OP_STACK
   int stack;
 
-  // X64_OP_LABEL
-  String* label;
+  // X64_OP_LABEL or X64_OP_DATA
+  String* ident;
 
   int size;
 } x64_Operand;
@@ -99,11 +100,21 @@ typedef struct {
   // Vec<x64_Instruction>
   Vec* instructions;
   int stack_size;
+  bool global;
 } x64_Function;
+
+typedef struct {
+  String* name;
+  bool global;
+  int init;
+} x64_StaticVariable;
 
 typedef struct {
   // Vec<X64_Function*>
   Vec* functions;
+
+  // Vec<x64_StaticVariable>
+  Vec* static_variables;
 } x64_Program;
 
 x64_Program* generate_x86(IrProgram* ir_program);

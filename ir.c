@@ -625,6 +625,8 @@ IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
 IrProgram* gen_ir(AstProgram* ast_program) {
   IrProgram* ir_program = calloc(1, sizeof(IrProgram));
   ir_program->functions = vec_new(sizeof(IrFunction));
+  ir_program->symbol_table = ast_program->symbol_table;
+
   vec_for_each(ast_program->decls, AstDecl, decl) {
     if (iter.decl->ty != AST_DECL_FN || iter.decl->fn.body == NULL) {
       continue;

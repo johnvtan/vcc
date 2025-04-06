@@ -47,8 +47,16 @@ static x64_Operand* stack(int val) {
 static x64_Operand* label_op(String* label) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_LABEL;
-  ret->label = label;
+  ret->ident = label;
   ret->size = 0;
+  return ret;
+}
+
+static x64_Operand* data(String* ident) {
+  x64_Operand* ret = calloc(1, sizeof(x64_Operand));
+  ret->ty = X64_OP_DATA;
+  ret->ident = ident;
+  ret->size = 4;
   return ret;
 }
 
@@ -166,33 +174,51 @@ static void idiv(IrVal* ir_r1, IrVal* ir_r2, Vec* out) {
 // If |operand| is not a pseudoreg, this does nothing and returns |operand|.
 // If |operand| is a pseudoreg, then it finds or inserts its position in |h|.
 // This changes |stack_pos| if this is the first time we encounter |operand|.
-static x64_Operand* fixup_pseudoreg(Hashmap* h, x64_Operand* operand,
-                                    int* stack_pos) {
+static x64_Operand* fixup_pseudoreg(SymbolTable* st, Hashmap* stackmap,
+                                    x64_Operand* operand, int* stack_pos) {
   if (!operand || !is_pseudo(operand)) {
     return operand;
   }
 
-  x64_Operand* stack_operand = hashmap_get(h, operand->pseudo);
-
-  if (!stack_operand) {
-    *stack_pos += 4;
-
-    // allocate a new stack operand if one doesn't exist
-    stack_operand = stack(*stack_pos * -1);
-    hashmap_put(h, operand->pseudo, stack_operand);
+  x64_Operand* stack_operand = hashmap_get(stackmap, operand->pseudo);
+  if (stack_operand) {
+    return stack_operand;
   }
+
+  // If we find a pseudoreg not in |stackmap|, check the symbol table if it's a
+  // static variable.
+  SymbolTableEntry* st_entry = hashmap_get(st->map, operand->pseudo);
+  if (st_entry) {
+    assert(st_entry->ty != ST_FN);
+
+    // Emit data operands for static variables.
+    if (st_entry->ty == ST_STATIC_VAR) {
+      return data(operand->pseudo);
+    }
+    // Allocate local variables on stack.
+  }
+
+  *stack_pos += 4;
+
+  // allocate a new stack operand if one doesn't exist
+  stack_operand = stack(*stack_pos * -1);
+  hashmap_put(stackmap, operand->pseudo, stack_operand);
   return stack_operand;
 }
 
-static inline bool stack_to_stack_not_allowed(x64_Instruction* instr) {
-  bool stack_to_stack = instr->r1 && instr->r1->ty == X64_OP_STACK &&
-                        instr->r2 && instr->r2->ty == X64_OP_STACK;
-
-  if (!stack_to_stack) {
+static inline bool requires_intermediate_register_mov(x64_Instruction* instr) {
+  bool is_affected_instr = instr->ty == X64_MOV || instr->ty == X64_ADD ||
+                           instr->ty == X64_SUB || instr->ty == X64_CMP;
+  if (!is_affected_instr) {
     return false;
   }
-  return instr->ty == X64_MOV || instr->ty == X64_ADD || instr->ty == X64_SUB ||
-         instr->ty == X64_CMP;
+
+  assert(instr->r1 && instr->r2);
+  bool r1_is_stack_or_data =
+      instr->r1->ty == X64_OP_STACK || instr->r1->ty == X64_OP_DATA;
+  bool r2_is_stack_or_data =
+      instr->r2->ty == X64_OP_STACK || instr->r2->ty == X64_OP_DATA;
+  return r1_is_stack_or_data && r2_is_stack_or_data;
 }
 
 //
@@ -208,7 +234,7 @@ static x64_Function* fixup_instructions(x64_Function* input) {
 
   push_instr(ret->instructions, alloc_stack(input->stack_size));
   vec_for_each(input->instructions, x64_Instruction, instr) {
-    if (stack_to_stack_not_allowed(iter.instr)) {
+    if (requires_intermediate_register_mov(iter.instr)) {
       // split up stack->stack ops into
       // mov r1, %r10d
       // {op} %r10d, r2
@@ -242,7 +268,7 @@ static x64_Function* fixup_instructions(x64_Function* input) {
   return ret;
 }
 
-static x64_Function* replace_pseudoregs(x64_Function* input) {
+static x64_Function* replace_pseudoregs(x64_Function* input, SymbolTable* st) {
   x64_Function* ret = function(input->name);
 
   // maps from pseudoreg name -> x64_Operand(stack)
@@ -250,8 +276,8 @@ static x64_Function* replace_pseudoregs(x64_Function* input) {
   int stack_pos = input->stack_size;
   vec_for_each(input->instructions, x64_Instruction, instr) {
     x64_Instruction cp = *iter.instr;
-    cp.r1 = fixup_pseudoreg(stack_map, iter.instr->r1, &stack_pos);
-    cp.r2 = fixup_pseudoreg(stack_map, iter.instr->r2, &stack_pos);
+    cp.r1 = fixup_pseudoreg(st, stack_map, iter.instr->r1, &stack_pos);
+    cp.r2 = fixup_pseudoreg(st, stack_map, iter.instr->r2, &stack_pos);
     push_instr(ret->instructions, cp);
   }
 
@@ -261,6 +287,7 @@ static x64_Function* replace_pseudoregs(x64_Function* input) {
 
 static x64_Function* convert_function(IrFunction* ir_function) {
   x64_Function* ret = function(ir_function->name);
+  ret->global = ir_function->global;
 
   // Retrieve arguments from registers or stack and move them
   // into pseudo registers.
@@ -451,13 +478,28 @@ static x64_Function* convert_function(IrFunction* ir_function) {
   return ret;
 }
 
+x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
+  x64_StaticVariable* ret = calloc(1, sizeof(x64_StaticVariable));
+  ret->name = ir->name;
+  ret->global = ir->global;
+  ret->init = ir->init;
+  return ret;
+}
+
 x64_Program* generate_x86(IrProgram* ast_program) {
   x64_Program* x64_prog = calloc(1, sizeof(x64_Program));
   x64_prog->functions = vec_new(sizeof(x64_Function));
+  x64_prog->static_variables = vec_new(sizeof(x64_StaticVariable));
   vec_for_each(ast_program->functions, IrFunction, ir_func) {
-    x64_Function* f =
-        fixup_instructions(replace_pseudoregs(convert_function(iter.ir_func)));
+    x64_Function* f = fixup_instructions(replace_pseudoregs(
+        convert_function(iter.ir_func), ast_program->symbol_table));
     vec_push(x64_prog->functions, f);
+  }
+
+  vec_for_each(ast_program->static_variables, IrStaticVariable,
+               ir_static_variable) {
+    vec_push(x64_prog->static_variables,
+             convert_static_variable(iter.ir_static_variable));
   }
   return x64_prog;
 }
