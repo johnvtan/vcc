@@ -1235,13 +1235,13 @@ static void typecheck_local_variable_decl(SymbolTable* symbol_table,
   symbol_table_put(symbol_table, decl->var.name, new_entry);
 }
 
-// Typecheck the variable declaration with an init expression.
+// Typecheck the variable declaration after trying to parse the init expression.
 //
 // This is separate from typechecking the declaration itself because the above
 // typechecking functions update the symbol map with type information, which may
 // be used when parsing the initializer because the initializer may refer to the
 // variable being declared.
-static void typecheck_variable_decl_with_init(ParseContext* cx, AstDecl* decl) {
+static void typecheck_variable_decl_after_init(ParseContext* cx, AstDecl* decl) {
   SymbolTableEntry* st_entry =
       hashmap_get(cx->symbol_table->map, decl->var.name);
   assert(st_entry);
@@ -1284,7 +1284,6 @@ static void typecheck_variable_decl_with_init(ParseContext* cx, AstDecl* decl) {
   } else if (decl->storage_class == SC_EXTERN) {
     static_var.init.ty = INIT_NONE;
   } else {
-    assert(decl->storage_class == SC_STATIC);
     static_var.init.ty = INIT_TENTATIVE;
   }
 
@@ -1331,12 +1330,12 @@ static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
   // Parse initializer if it exists.
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
-    // Under the hood, init expressions are rewritten to be
-    // an assign expr.
     decl->var.init = parse_expr(cx, PREC_MIN);
-    typecheck_variable_decl_with_init(cx, decl);
   }
 
+  // This function updates the symbol table so it should always be called
+  // even if there's no init expression.
+  typecheck_variable_decl_after_init(cx, decl);
   expect(cx, TK_SEMICOLON);
   return decl;
 }

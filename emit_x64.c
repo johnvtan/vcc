@@ -54,6 +54,10 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
       emit(cx, ".L%s", cstring(op->ident));
       break;
     }
+    case X64_OP_DATA: {
+      emit(cx, "%s(%%rip)", cstring(op->ident));
+      break;
+    }
     default:
       panic("Unrecognized x64 operand %lu", op->ty);
   }
@@ -81,6 +85,7 @@ static void emit_label(Context* cx, const String* label, bool global,
   if (global) {
     emit(cx, "\t.globl %s\n", cstring(label));
   }
+  emit(cx, "\t.text\n");
   if (generated) {
     emit(cx, ".L%s:\n", cstring(label));
   } else {
@@ -193,11 +198,32 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
 
 static void emit_function(Context* cx, x64_Function* fn) {
   // Function prologue
-  emit_label(cx, fn->name, true, false);
+  emit(cx, "\n");
+  emit_label(cx, fn->name, fn->global, false);
   emit(cx, "\tpushq %%rbp\n");
   emit(cx, "\tmovq %%rsp, %%rbp\n");
   vec_for_each(fn->instructions, x64_Instruction, instr) {
     emit_inst(cx, iter.instr);
+  }
+}
+
+static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
+  if (sv->global) {
+    emit(cx, "\t.globl %s\n", cstring(sv->name));
+  }
+
+  if (sv->init) {
+    emit(cx, ".data\n");
+  } else {
+    emit(cx, ".bss\n");
+  }
+
+  emit(cx, "\t.align 4\n");
+  emit(cx, "%s:\n", cstring(sv->name));
+  if (sv->init) {
+    emit(cx, "\t.long %d\n", sv->init);
+  } else {
+    emit(cx, "\t.zero 4\n");
   }
 }
 
@@ -208,6 +234,10 @@ int emit_x64(x64_Program* program, const char* outfile) {
 
   vec_for_each(program->functions, x64_Function, fn) {
     emit_function(&cx, iter.fn);
+  }
+
+  vec_for_each(program->static_variables, x64_StaticVariable, static_variable) {
+    emit_static_variable(&cx, iter.static_variable);
   }
 
   emit(&cx, "\t.section .note.GNU-stack,\"\",@progbits\n");

@@ -206,6 +206,10 @@ static x64_Operand* fixup_pseudoreg(SymbolTable* st, Hashmap* stackmap,
   return stack_operand;
 }
 
+static inline bool op_is_stack_or_data(x64_Operand* op) {
+  return op->ty == X64_OP_STACK || op->ty == X64_OP_DATA;
+}
+
 static inline bool requires_intermediate_register_mov(x64_Instruction* instr) {
   bool is_affected_instr = instr->ty == X64_MOV || instr->ty == X64_ADD ||
                            instr->ty == X64_SUB || instr->ty == X64_CMP;
@@ -214,11 +218,7 @@ static inline bool requires_intermediate_register_mov(x64_Instruction* instr) {
   }
 
   assert(instr->r1 && instr->r2);
-  bool r1_is_stack_or_data =
-      instr->r1->ty == X64_OP_STACK || instr->r1->ty == X64_OP_DATA;
-  bool r2_is_stack_or_data =
-      instr->r2->ty == X64_OP_STACK || instr->r2->ty == X64_OP_DATA;
-  return r1_is_stack_or_data && r2_is_stack_or_data;
+  return op_is_stack_or_data(instr->r1) && op_is_stack_or_data(instr->r2);
 }
 
 //
@@ -226,6 +226,7 @@ static inline bool requires_intermediate_register_mov(x64_Instruction* instr) {
 //
 static x64_Function* fixup_instructions(x64_Function* input) {
   x64_Function* ret = function(input->name);
+  ret->global = input->global;
 
   // Round up stack to nearest 16 bytes.
   if (input->stack_size % 16) {
@@ -250,7 +251,7 @@ static x64_Function* fixup_instructions(x64_Function* input) {
       push_instr(ret->instructions, mov(iter.instr->r1, r10));
       push_instr(ret->instructions, instr1(X64_IDIV, r10));
     } else if (iter.instr->ty == X64_MUL &&
-               iter.instr->r2->ty == X64_OP_STACK) {
+               op_is_stack_or_data(iter.instr->r2)) {
       // mul can't use a stack location as its r2
       x64_Operand* r11 = reg(REG_R11, 4);
       push_instr(ret->instructions, mov(iter.instr->r2, r11));
@@ -270,6 +271,7 @@ static x64_Function* fixup_instructions(x64_Function* input) {
 
 static x64_Function* replace_pseudoregs(x64_Function* input, SymbolTable* st) {
   x64_Function* ret = function(input->name);
+  ret->global = input->global;
 
   // maps from pseudoreg name -> x64_Operand(stack)
   Hashmap* stack_map = hashmap_new();

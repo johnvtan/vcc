@@ -559,6 +559,12 @@ static void gen_decl(AstDecl* decl, Vec* out) {
     return;
   }
 
+  if (decl->storage_class == SC_STATIC) {
+    // Ignore static variable declarations. These get generated from the symbol
+    // table.
+    return;
+  }
+
   if (!decl->var.init) {
     return;
   }
