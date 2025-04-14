@@ -6,7 +6,7 @@ import tempfile
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--lex", help="Run up to lexer", action="store_true")
-    # parse is not supported -- validation and parse happen at the same time
+    parser.add_argument("--parse", help="Run up to parser", action="store_true")
     parser.add_argument("--validate", help="Run up to validation", action="store_true")
     parser.add_argument("--tacky", help="Run up to tacky", action="store_true")
     parser.add_argument("--codegen", help="Run up to codegen", action="store_true")
@@ -32,6 +32,7 @@ if __name__ == '__main__':
     vcc_cli_arg = ""
     emit = False
     if args.lex: vcc_cli_arg = "--lex"
+    elif args.parse: vcc_cli_arg = "--parse"
     elif args.validate: vcc_cli_arg = "--validate"
     elif args.tacky: vcc_cli_arg = "--tacky"
     elif args.codegen: vcc_cli_arg = "--codegen"

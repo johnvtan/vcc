@@ -25,7 +25,6 @@ static AstStmt* parse_stmt(ParseContext* cx);
 typedef struct IdentifierScope IdentifierScope;
 typedef struct IdentifierInfo {
   // Internal unique name, could be different from the key
-  // This is the name that is used as the index in SymbolTable.
   String* name;
   bool has_linkage;
 
@@ -64,14 +63,6 @@ static ResolvedIdentifier resolve_identifier(IdentifierScope* curr_scope,
   return (ResolvedIdentifier){NULL, false};
 }
 
-static void symbol_table_put(SymbolTable* st, String* name,
-                             SymbolTableEntry e) {
-  SymbolTableEntry* copy = calloc(1, sizeof(SymbolTableEntry));
-  vec_push(st->symbols, name);
-  *copy = e;
-  hashmap_put(st->map, name, copy);
-}
-
 // This is basically an iterator through the token list.
 // Vec is essentially a stack and only supports pushing to/popping from the
 // back.
@@ -85,9 +76,6 @@ struct ParseContext {
 
   size_t var_count;
   IdentifierScope* scope;  // per block
-
-  // global -- each identifier should use its unique name.
-  SymbolTable* symbol_table;
 
   // defined labels
   Hashmap* labels;  // Hashmap<string, string>, per functtion --> really a set
@@ -275,11 +263,6 @@ static AstExpr* expr_binary(int op, AstExpr* lhs, AstExpr* rhs) {
   e->binary.op = op;
   e->binary.lhs = lhs;
   e->binary.rhs = rhs;
-
-  // TODO: typechecking needs to be improved
-  if (lhs->c_type != TYPE_INT || rhs->c_type != TYPE_INT) {
-    panic("binary ops only work on integer types", 1);
-  }
   return e;
 }
 
@@ -310,15 +293,6 @@ static AstExpr* parse_function_call(ParseContext* cx) {
     panic("Function %s called before definition", cstring(t.content));
   }
 
-  // typecheck function call against declaration
-  SymbolTableEntry* st_entry = hashmap_get(cx->symbol_table->map, r.info->name);
-  if (!st_entry) {
-    panic("No function declaration found for %s", r.info->name);
-  }
-  if (st_entry->ty != ST_FN) {
-    panic("Cannot call non-function", 1);
-  }
-
   e->fn_call.ident = r.info->name;
   e->fn_call.args = vec_new(sizeof(AstExpr));
 
@@ -339,11 +313,6 @@ static AstExpr* parse_function_call(ParseContext* cx) {
 
   expect(cx, TK_CLOSE_PAREN);
 
-  // Verify fn_call has correct number of arguments.
-  if (st_entry->fn.num_params != e->fn_call.args->len) {
-    panic("Mismatching number of parameters to %s", cstring(e->fn_call.ident));
-  }
-
   return e;
 }
 
@@ -356,20 +325,6 @@ static AstExpr* parse_variable(ParseContext* cx) {
     exit(-1);
   }
   e->ident = info->name;
-
-  // Propagate type into expr
-  SymbolTableEntry* st_entry = hashmap_get(cx->symbol_table->map, e->ident);
-  if (!st_entry) {
-    // This is definitely a hack
-    return e;
-  }
-
-  if (st_entry->ty == ST_FN) {
-    panic("%s is a variable but has a function type", cstring(e->ident));
-  }
-
-  e->c_type = st_entry->ty == ST_LOCAL_VAR ? st_entry->local.c_type
-                                           : st_entry->static_.c_type;
   return e;
 }
 
@@ -930,23 +885,17 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
     AstFnParam* param = vec_push_empty(param_list);
     param->c_type = specs.c_type;
 
+    // In general, we check for redeclarations in typechecking, but
+    // for function parameters we check here so that we can then
+    // generate a unique var name for each parameter.
     if (hashmap_get(ident_map, t.content) != NULL) {
       panic("Function parameter %s redeclared", cstring(t.content));
     }
 
-    // Update identifier resolution and symbol table with function parameters.
-    String* unique_var_name =
-        string_format("%s.%u", cstring(t.content), cx->var_count++);
+    // Update identifier resolution.
+    param->ident = string_format("%s.%u", cstring(t.content), cx->var_count++);
     hashmap_put(ident_map, t.content,
-                new_ident_info(unique_var_name, false, cx->scope));
-
-    SymbolTableEntry e = {.ty = ST_LOCAL_VAR,
-                          .local = {
-                              .c_type = specs.c_type,
-                          }};
-    symbol_table_put(cx->symbol_table, unique_var_name, e);
-
-    param->ident = unique_var_name;
+                new_ident_info(param->ident, false, cx->scope));
 
     if (match(cx, TK_CLOSE_PAREN)) {
       break;
@@ -956,57 +905,6 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
 
   expect(cx, TK_CLOSE_PAREN);
   return param_list;
-}
-
-// Typechecks the function signature in |decl| against a previous declaration if
-// it exists. Updates cx->symbol_table if no previous declaration exists.
-static void typecheck_function_signature(SymbolTable* symbol_table,
-                                         AstDecl* decl) {
-  assert(decl->ty == AST_DECL_FN);
-
-  size_t num_params = decl->fn.params->len;
-  SymbolTableEntry* st_entry = hashmap_get(symbol_table->map, decl->fn.name);
-
-  if (!st_entry) {
-    // declared type doesn't exist in type table, so insert
-    // No need to type check against previous declaration.
-    bool global = decl->storage_class != SC_STATIC;
-
-    // defined is always false because this is just the function signature.
-    // we'll update the symbol table entry when we find the function body for
-    // this declaration.
-    SymbolTableEntry e = {
-        .ty = ST_FN,
-        .fn =
-            {
-                .num_params = num_params,
-                .defined = false,
-                .global = global,
-            },
-    };
-    symbol_table_put(symbol_table, decl->fn.name, e);
-    return;
-  }
-
-  // have previous declaration, so check against it.
-  if (st_entry->ty != ST_FN) {
-    panic(
-        "Found function declaration for ident %s but previously declared "
-        "as "
-        "a variable.",
-        cstring(decl->fn.name));
-  }
-  if (st_entry->fn.num_params != num_params) {
-    panic(
-        "Function declaration %s conflicts with mismatching parameter list. "
-        "Expected %d but got %d parameters.",
-        cstring(decl->fn.name), decl->fn.params->len, st_entry->fn.num_params);
-  }
-
-  if (st_entry->fn.global && decl->storage_class == SC_STATIC) {
-    panic("Static function declaration for %s follows non-static",
-          cstring(decl->fn.name));
-  }
 }
 
 // Parses the function signature with |ident_map|. This |ident_map| should
@@ -1048,7 +946,6 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map,
                 new_ident_info(decl->fn.name, true, cx->scope));
   }
 
-  typecheck_function_signature(cx->symbol_table, decl);
   return decl;
 }
 
@@ -1069,15 +966,6 @@ static AstDecl* parse_function(ParseContext* cx, ParsedSpecifiers specs) {
   if (!at_top_level(cx)) {
     panic("Nested function definition not allowed", 1);
   }
-
-  // Check and update symbol table with fn definition
-  SymbolTableEntry* st_entry =
-      hashmap_get(cx->symbol_table->map, decl->fn.name);
-  assert(st_entry && st_entry->ty == ST_FN);
-  if (st_entry->fn.defined) {
-    panic("Found redefinition of function %s", cstring(decl->fn.name));
-  }
-  st_entry->fn.defined = true;
 
   cx->labels = hashmap_new();
   cx->gone_to_labels = vec_new(sizeof(String));
@@ -1146,163 +1034,6 @@ static String* resolve_variable_decl(ParseContext* cx, ParsedSpecifiers specs,
   return unique_var_name;
 }
 
-static void typecheck_file_scope_variable_decl(SymbolTable* symbol_table,
-                                               AstDecl* decl) {
-  assert(decl && decl->ty == AST_DECL_VAR);
-
-  // Build up new symbol table entry in case we have to add it to the symbol
-  // table or to check against the old entry if it exists.
-  SymbolTableEntry new_entry = {
-      .ty = ST_STATIC_VAR,
-      .static_ = {.c_type = decl->var.c_type,
-                  .global = decl->storage_class != SC_STATIC,
-                  .init = {}}};
-
-  SymbolTableEntry* st_entry = hashmap_get(symbol_table->map, decl->var.name);
-  if (!st_entry) {
-    symbol_table_put(symbol_table, decl->var.name, new_entry);
-    return;
-  }
-
-  // Check new_entry against st_entry.
-  if (st_entry->ty != ST_STATIC_VAR) {
-    panic("Function redeclared as variable %s", cstring(decl->var.name));
-  }
-
-  // Extern declarations take on the value for global from the old declaration,
-  // so we can skip this check for extern declarations.
-  if (decl->storage_class != SC_EXTERN &&
-      (st_entry->static_.global != new_entry.static_.global)) {
-    panic(
-        "Static variable declaration follows non-static declaration for var %s",
-        cstring(decl->var.name));
-  }
-}
-
-// Typecheck a local variable declaration.
-static void typecheck_local_variable_decl(SymbolTable* symbol_table,
-                                          AstDecl* decl) {
-  assert(decl && decl->ty == AST_DECL_VAR);
-  SymbolTableEntry* st_entry = hashmap_get(symbol_table->map, decl->var.name);
-
-  if (decl->storage_class == SC_EXTERN) {
-    if (st_entry) {
-      // compiler bug -- local non-extern variables should have unique names.
-      assert(st_entry->ty != ST_LOCAL_VAR);
-      if (st_entry->ty == ST_FN) {
-        panic("Function redeclared as variable %s", cstring(decl->var.name));
-      }
-      return;
-    }
-
-    // First declaration for extern variable.
-    SymbolTableEntry new_entry = {
-        .ty = ST_STATIC_VAR,
-        .static_ = {.c_type = decl->var.c_type,
-
-                    // extern variables are global even if they're declared at
-                    // block scope
-                    .global = true,
-                    .init = {
-                        .ty = INIT_NONE,
-                    }}};
-    symbol_table_put(symbol_table, decl->var.name, new_entry);
-    return;
-  }
-
-  // local variables (both static and other) should have unique names
-  // with no previous entries in the symbol table by this point.
-  assert(!st_entry);
-  if (decl->storage_class == SC_STATIC) {
-    SymbolTableEntry new_entry = {.ty = ST_STATIC_VAR,
-                                  .static_ = {.c_type = decl->var.c_type,
-                                              .global = false,
-                                              .init = {
-                                                  .ty = INIT_HAS_VALUE,
-                                                  .val = 0,
-                                              }}};
-    symbol_table_put(symbol_table, decl->var.name, new_entry);
-    return;
-  }
-
-  // local variable with no storage class.
-  // local variables should have a unique name, meaning that no previous symbol
-  // table entry should exist.
-  SymbolTableEntry new_entry = {.ty = ST_LOCAL_VAR,
-                                .local = {
-                                    .c_type = decl->var.c_type,
-                                }};
-  symbol_table_put(symbol_table, decl->var.name, new_entry);
-}
-
-// Typecheck the variable declaration after trying to parse the init expression.
-//
-// This is separate from typechecking the declaration itself because the above
-// typechecking functions update the symbol map with type information, which may
-// be used when parsing the initializer because the initializer may refer to the
-// variable being declared.
-static void typecheck_variable_decl_after_init(ParseContext* cx, AstDecl* decl) {
-  SymbolTableEntry* st_entry =
-      hashmap_get(cx->symbol_table->map, decl->var.name);
-  assert(st_entry);
-  if (!at_top_level(cx)) {
-    if (decl->storage_class == SC_EXTERN && decl->var.init) {
-      panic("Initializer for extern variable %s not allowed",
-            cstring(decl->var.name));
-    }
-
-    if (decl->storage_class == SC_STATIC && decl->var.init) {
-      if (decl->var.init->ty != EXPR_INT_CONST) {
-        panic(
-            "Static block scope variables must have int constant initializers "
-            "but found %d",
-            decl->var.init->ty);
-      }
-      st_entry->static_.init.val = decl->var.init->int_const;
-    }
-
-    // non-static local variables don't have an init field in the symbol table,
-    // so ignore them.
-    return;
-  }
-
-  // Build up new symbol table entry in case we have to add it to the symbol
-  // table or to check against the old entry if it exists.
-  StaticVariableSymbol static_var = {.c_type = decl->var.c_type,
-                                     .global = decl->storage_class != SC_STATIC,
-                                     .init = {}};
-
-  if (decl->var.init) {
-    if (decl->var.init->ty != EXPR_INT_CONST) {
-      panic(
-          "File scope var initializers may only be constant expressions, but "
-          "found %d",
-          decl->var.init->ty);
-    }
-    static_var.init.ty = INIT_HAS_VALUE;
-    static_var.init.val = decl->var.init->int_const;
-  } else if (decl->storage_class == SC_EXTERN) {
-    static_var.init.ty = INIT_NONE;
-  } else {
-    static_var.init.ty = INIT_TENTATIVE;
-  }
-
-  // Check for redefinitions.
-  if (st_entry->static_.init.ty == INIT_HAS_VALUE &&
-      static_var.init.ty == INIT_HAS_VALUE) {
-    panic("File scope variable %s redefined", cstring(decl->var.name));
-  }
-
-  // Now decide who's initializer to take. Previous or new one?
-  // Take on new init value if it has higher priority over the older one.
-  // INIT_HAS_VALUE > INIT_TENTATIVE > INIT_NONE.
-  //
-  // This updates |st_entry| in place.
-  if (static_var.init.ty > st_entry->static_.init.ty) {
-    st_entry->static_.init = static_var.init;
-  }
-}
-
 static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
   assert(specs.c_type == TYPE_INT);  // TODO: more types.
 
@@ -1317,25 +1048,12 @@ static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
   decl->var.name = unique_var_name;
   decl->storage_class = specs.storage_class;
 
-  // Typecheck decl before getting to initializer.
-  // This will update the symbol table as well so that type information
-  // is available for this variable in the initializer in case it refers to
-  // itself which is apparently allowed.
-  if (at_top_level(cx)) {
-    typecheck_file_scope_variable_decl(cx->symbol_table, decl);
-  } else {
-    typecheck_local_variable_decl(cx->symbol_table, decl);
-  }
-
   // Parse initializer if it exists.
   if (peek(cx).ty == TK_EQ) {
     consume(cx);
     decl->var.init = parse_expr(cx, PREC_MIN);
   }
 
-  // This function updates the symbol table so it should always be called
-  // even if there's no init expression.
-  typecheck_variable_decl_after_init(cx, decl);
   expect(cx, TK_SEMICOLON);
   return decl;
 }
@@ -1354,10 +1072,6 @@ AstProgram* parse_ast(Vec* tokens) {
       .parent = NULL,
   };
 
-  SymbolTable* symbol_table = calloc(1, sizeof(SymbolTable));
-  symbol_table->map = hashmap_new();
-  symbol_table->symbols = vec_new(sizeof(String));
-
   ParseContext cx = {
       .tokens = tokens,
       .curr_fn = NULL,
@@ -1369,12 +1083,10 @@ AstProgram* parse_ast(Vec* tokens) {
       .break_stack = vec_new(sizeof(String*)),
       .continue_stack = vec_new(sizeof(String*)),
       .case_stack = vec_new(sizeof(Vec*)),
-      .symbol_table = symbol_table,
   };
 
   AstProgram* prog = calloc(1, sizeof(AstProgram));
   prog->decls = vec_new(sizeof(AstDecl));
-  prog->symbol_table = symbol_table;
 
   while (cx.idx < cx.tokens->len) {
     AstDecl* decl = parse_decl(&cx);

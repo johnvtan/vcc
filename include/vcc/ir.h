@@ -2,6 +2,7 @@
 #define VCC_IR_H
 
 #include <vcc/ast.h>
+#include <vcc/typecheck.h>
 #include <vcc/vec.h>
 
 typedef struct {
@@ -87,6 +88,6 @@ typedef struct {
   SymbolTable* symbol_table;
 } IrProgram;
 
-IrProgram* gen_ir(AstProgram* program);
+IrProgram* gen_ir(AstProgram* program, SymbolTable* symbol_table);
 
 #endif  // VCC_IR_H

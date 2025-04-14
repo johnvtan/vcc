@@ -569,8 +569,7 @@ static void gen_decl(AstDecl* decl, Vec* out) {
     return;
   }
 
-  // Fake assignment here.
-  // TODO: different for static variables.
+  // Rewrite initialization as an assignment.
   IrVal* lhs = var(decl->var.name);
   IrVal* rhs = gen_expr(decl->var.init, out);
   push_inst(out, copy(rhs, lhs));
@@ -628,24 +627,24 @@ IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
   return ir_static_variable;
 }
 
-IrProgram* gen_ir(AstProgram* ast_program) {
+IrProgram* gen_ir(AstProgram* ast_program, SymbolTable* symbol_table) {
   IrProgram* ir_program = calloc(1, sizeof(IrProgram));
   ir_program->functions = vec_new(sizeof(IrFunction));
-  ir_program->symbol_table = ast_program->symbol_table;
+  ir_program->symbol_table = symbol_table;
 
   vec_for_each(ast_program->decls, AstDecl, decl) {
     if (iter.decl->ty != AST_DECL_FN || iter.decl->fn.body == NULL) {
       continue;
     }
-    IrFunction* f = gen_function(iter.decl, ast_program->symbol_table);
+    IrFunction* f = gen_function(iter.decl, symbol_table);
     vec_push(ir_program->functions, f);
   }
 
   ir_program->static_variables = vec_new(sizeof(IrStaticVariable));
-  vec_for_each(ast_program->symbol_table->symbols, String, symbol) {
+  vec_for_each(symbol_table->symbols, String, symbol) {
     String* symbol = iter.symbol;
     IrStaticVariable* static_variable =
-        gen_static_variable(symbol, ast_program->symbol_table);
+        gen_static_variable(symbol, symbol_table);
     if (static_variable) {
       vec_push(ir_program->static_variables, static_variable);
     }

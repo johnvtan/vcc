@@ -9,6 +9,7 @@
 #include <vcc/ir.h>
 #include <vcc/lex.h>
 #include <vcc/string.h>
+#include <vcc/typecheck.h>
 
 static const struct option long_options[] = {
     {"lex", optional_argument, NULL, 'l'},
@@ -94,11 +95,13 @@ int main(int argc, char** argv) {
   if (args.stage == PARSE) {
     return 0;
   }
+
+  SymbolTable* symbol_table = typecheck_ast(prog);
   if (args.stage == VALIDATE) {
     return 0;
   }
 
-  IrProgram* ir_prog = gen_ir(prog);
+  IrProgram* ir_prog = gen_ir(prog, symbol_table);
   if (!ir_prog) {
     return -1;
   }
