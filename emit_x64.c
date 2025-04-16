@@ -5,6 +5,19 @@
 #include <vcc/string.h>
 
 //
+// Platform specific defines.
+//
+#if __APPLE__
+#define ASM_SYMBOL_PREFIX "_"
+#define LOCAL_LABEL_PREFIX "L"
+#elif __linux__
+#define ASM_SYMBOL_PREFIX ""
+#define LOCAL_LABEL_PREFIX ".L"
+#else
+#error "Only MacOS and linux are supported"
+#endif
+
+//
 // Context for emitting code.
 //
 typedef struct {
@@ -51,11 +64,11 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
       break;
     }
     case X64_OP_LABEL: {
-      emit(cx, ".L%s", cstring(op->ident));
+      emit(cx, LOCAL_LABEL_PREFIX "%s", cstring(op->ident));
       break;
     }
     case X64_OP_DATA: {
-      emit(cx, "%s(%%rip)", cstring(op->ident));
+      emit(cx, ASM_SYMBOL_PREFIX "%s(%%rip)", cstring(op->ident));
       break;
     }
     default:
@@ -80,17 +93,16 @@ static void emit1(Context* cx, const char* inst, const x64_Operand* arg) {
 
 static void emit0(Context* cx, const char* inst) { emit(cx, "\t%s\n", inst); }
 
-static void emit_label(Context* cx, const String* label, bool global,
-                       bool generated) {
+static void emit_label(Context* cx, const String* label) {
+  emit(cx, LOCAL_LABEL_PREFIX "%s:\n", cstring(label));
+}
+
+static void emit_function_label(Context* cx, const String* label, bool global) {
   if (global) {
-    emit(cx, "\t.globl %s\n", cstring(label));
+    emit(cx, "\t.globl " ASM_SYMBOL_PREFIX "%s\n", cstring(label));
   }
   emit(cx, "\t.text\n");
-  if (generated) {
-    emit(cx, ".L%s:\n", cstring(label));
-  } else {
-    emit(cx, "%s:\n", cstring(label));
-  }
+  emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(label));
 }
 
 //
@@ -174,14 +186,14 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
       }
-      emit_label(cx, inst->r1->ident, false, true);
+      emit_label(cx, inst->r1->ident);
       break;
     }
     case X64_CALL: {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
       }
-      emit(cx, "\tcall %s\n", cstring(inst->r1->ident));
+      emit(cx, "\tcall " ASM_SYMBOL_PREFIX "%s\n", cstring(inst->r1->ident));
       break;
     }
     case X64_PUSH: {
@@ -199,7 +211,7 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
 static void emit_function(Context* cx, x64_Function* fn) {
   // Function prologue
   emit(cx, "\n");
-  emit_label(cx, fn->name, fn->global, false);
+  emit_function_label(cx, fn->name, fn->global);
   emit(cx, "\tpushq %%rbp\n");
   emit(cx, "\tmovq %%rsp, %%rbp\n");
   vec_for_each(fn->instructions, x64_Instruction, instr) {
@@ -209,7 +221,7 @@ static void emit_function(Context* cx, x64_Function* fn) {
 
 static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
   if (sv->global) {
-    emit(cx, "\t.globl %s\n", cstring(sv->name));
+    emit(cx, "\t.globl " ASM_SYMBOL_PREFIX "%s\n", cstring(sv->name));
   }
 
   if (sv->init) {
@@ -218,8 +230,8 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
     emit(cx, ".bss\n");
   }
 
-  emit(cx, "\t.align 4\n");
-  emit(cx, "%s:\n", cstring(sv->name));
+  emit(cx, "\t.balign 4\n");
+  emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
   if (sv->init) {
     emit(cx, "\t.long %d\n", sv->init);
   } else {
@@ -240,6 +252,8 @@ int emit_x64(x64_Program* program, const char* outfile) {
     emit_static_variable(&cx, iter.static_variable);
   }
 
+#if __linux__
   emit(&cx, "\t.section .note.GNU-stack,\"\",@progbits\n");
+#endif
   return 0;
 }

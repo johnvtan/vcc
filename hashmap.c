@@ -123,7 +123,7 @@ static void rehash(Hashmap* h) {
 
     count++;
     HashmapEntry* new = get_or_insert(h, old->key);
-    assert(new&& old && old->state == VALID);
+    assert(new && old && old->state == VALID);
 
     new->key = old->key;
     new->state = VALID;
