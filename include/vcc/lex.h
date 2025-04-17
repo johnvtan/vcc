@@ -9,6 +9,8 @@
 typedef enum {
   // keywords
   TK_INT,
+  TK_LONG,
+
   TK_VOID,
   TK_RETURN,
   TK_OPEN_PAREN,
@@ -58,7 +60,8 @@ typedef enum {
   TK_EXTERN,
 
   TK_IDENT,
-  TK_NUM_CONST,
+  TK_INT_CONST,
+  TK_LONG_CONST,
 } TokenType;
 
 typedef struct {

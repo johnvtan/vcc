@@ -329,7 +329,7 @@ static AstExpr* parse_variable(ParseContext* cx) {
 }
 
 static AstExpr* parse_primary(ParseContext* cx) {
-  if (match(cx, TK_NUM_CONST)) {
+  if (match(cx, TK_INT_CONST)) {
     Token t = consume(cx);
     AstExpr* int_const = expr(EXPR_INT_CONST);
     int_const->int_const = strtol(cstring(t.content), NULL, 10);

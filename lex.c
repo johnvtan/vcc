@@ -13,53 +13,22 @@ typedef struct {
 } KeywordMatch;
 
 static KeywordMatch KEYWORD_MATCHES[] = {
-    {TK_INT, "int"},
-    {TK_VOID, "void"},
-    {TK_RETURN, "return"},
-    {TK_OPEN_PAREN, "("},
-    {TK_CLOSE_PAREN, ")"},
-    {TK_OPEN_BRACE, "{"},
-    {TK_CLOSE_BRACE, "}"},
-    {TK_SEMICOLON, ";"},
-    {TK_TILDE, "~"},
-    {TK_DASH, "-"},
-    {TK_DASHDASH, "--"},
-    {TK_PLUS, "+"},
-    {TK_PLUSPLUS, "++"},
-    {TK_STAR, "*"},
-    {TK_SLASH, "/"},
-    {TK_PERCENT, "%"},
-    {TK_BANG, "!"},
-    {TK_AMPAMP, "&&"},
-    {TK_PIPEPIPE, "||"},
-    {TK_EQEQ, "=="},
-    {TK_BANGEQ, "!="},
-    {TK_LT, "<"},
-    {TK_GT, ">"},
-    {TK_LTEQ, "<="},
-    {TK_GTEQ, ">="},
-    {TK_EQ, "="},
-    {TK_PLUSEQ, "+="},
-    {TK_DASHEQ, "-="},
-    {TK_STAREQ, "*="},
-    {TK_SLASHEQ, "/="},
-    {TK_PERCENTEQ, "%="},
-    {TK_IF, "if"},
-    {TK_ELSE, "else"},
-    {TK_QUESTION, "?"},
-    {TK_COLON, ":"},
-    {TK_GOTO, "goto"},
-    {TK_DO, "do"},
-    {TK_WHILE, "while"},
-    {TK_FOR, "for"},
-    {TK_BREAK, "break"},
-    {TK_CONTINUE, "continue"},
-    {TK_SWITCH, "switch"},
-    {TK_CASE, "case"},
-    {TK_DEFAULT, "default"},
-    {TK_COMMA, ","},
-    {TK_STATIC, "static"},
-    {TK_EXTERN, "extern"},
+    {TK_INT, "int"},       {TK_LONG, "long"},     {TK_VOID, "void"},
+    {TK_RETURN, "return"}, {TK_OPEN_PAREN, "("},  {TK_CLOSE_PAREN, ")"},
+    {TK_OPEN_BRACE, "{"},  {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},
+    {TK_TILDE, "~"},       {TK_DASH, "-"},        {TK_DASHDASH, "--"},
+    {TK_PLUS, "+"},        {TK_PLUSPLUS, "++"},   {TK_STAR, "*"},
+    {TK_SLASH, "/"},       {TK_PERCENT, "%"},     {TK_BANG, "!"},
+    {TK_AMPAMP, "&&"},     {TK_PIPEPIPE, "||"},   {TK_EQEQ, "=="},
+    {TK_BANGEQ, "!="},     {TK_LT, "<"},          {TK_GT, ">"},
+    {TK_LTEQ, "<="},       {TK_GTEQ, ">="},       {TK_EQ, "="},
+    {TK_PLUSEQ, "+="},     {TK_DASHEQ, "-="},     {TK_STAREQ, "*="},
+    {TK_SLASHEQ, "/="},    {TK_PERCENTEQ, "%="},  {TK_IF, "if"},
+    {TK_ELSE, "else"},     {TK_QUESTION, "?"},    {TK_COLON, ":"},
+    {TK_GOTO, "goto"},     {TK_DO, "do"},         {TK_WHILE, "while"},
+    {TK_FOR, "for"},       {TK_BREAK, "break"},   {TK_CONTINUE, "continue"},
+    {TK_SWITCH, "switch"}, {TK_CASE, "case"},     {TK_DEFAULT, "default"},
+    {TK_COMMA, ","},       {TK_STATIC, "static"}, {TK_EXTERN, "extern"},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
@@ -195,19 +164,35 @@ static bool match_ident(const FilePos* pos, Token* out_token) {
 }
 
 static bool match_num_constant(const FilePos* pos, Token* out_token) {
+  // Advance until no longer a number.
   size_t n = 0;
   while (!file_pos_is_eof(pos) && is_num(file_pos_peek_char_at(pos, n))) {
     n++;
   }
 
+  // Determine the out token type based on the suffx.
+  // An integral suffix (for now) is only one character. Eventually, we'll need
+  // to handle suffixes with multiple characters, like UL.
+  TokenType out_ty = TK_INT_CONST;
+  char next_char = file_pos_peek_char_at(pos, n);
+  switch (next_char) {
+    case 'l':
+    case 'L':
+      out_ty = TK_LONG_CONST;
+      next_char = file_pos_peek_char_at(pos, n + 1);
+      break;
+    default:
+      break;
+  }
+
   // TODO: we have to check that the number ends at a word boundary.
   // Currently we check this by looking at the next character and seeing if it's
   // part of some malformed ident, but is this the right way to check?
-  if (!n || is_ident_char(file_pos_peek_char_at(pos, n))) {
+  if (!n || is_ident_char(next_char)) {
     return false;
   }
 
-  out_token->ty = TK_NUM_CONST;
+  out_token->ty = out_ty;
   out_token->pos = *pos;
   out_token->content = string_substring(pos->contents, pos->idx, n);
   return true;
