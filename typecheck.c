@@ -65,7 +65,7 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
                                      .init = {}};
 
   if (decl->var.init) {
-    if (decl->var.init->ty != EXPR_INT_CONST) {
+    if (decl->var.init->ty != EXPR_CONST) {
       panic(
           "File scope var initializers may only be constant expressions, but "
           "found %d",
@@ -145,7 +145,7 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
                                               }}};
 
     if (decl->var.init) {
-      if (decl->var.init->ty != EXPR_INT_CONST) {
+      if (decl->var.init->ty != EXPR_CONST) {
         panic(
             "Static block scope variables must have int constant initializers "
             "but found %d",
@@ -168,6 +168,12 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   symbol_table_put(symbol_table, decl->var.name, new_entry);
   if (decl->var.init) {
     typecheck_expr(cx, decl->var.init);
+  }
+}
+
+static void check_lvalue(AstExpr* expr) {
+  if (expr->ty != EXPR_VAR) {
+    panic("Expected lvalue but got ty %u", expr->ty);
   }
 }
 
@@ -194,11 +200,31 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
     }
     case EXPR_UNARY: {
       typecheck_expr(cx, expr->unary.expr);
+      switch (expr->unary.op) {
+        case UNARY_POSTINC:
+        case UNARY_POSTDEC:
+        case UNARY_PREINC:
+        case UNARY_PREDEC:
+          check_lvalue(expr->unary.expr);
+        default:
+          break;
+      }
       return;
     }
     case EXPR_BINARY: {
       typecheck_expr(cx, expr->binary.lhs);
       typecheck_expr(cx, expr->binary.rhs);
+      switch (expr->binary.op) {
+        case BINARY_ASSIGN:
+        case BINARY_ADD_ASSIGN:
+        case BINARY_SUB_ASSIGN:
+        case BINARY_DIV_ASSIGN:
+        case BINARY_MUL_ASSIGN:
+        case BINARY_REM_ASSIGN:
+          check_lvalue(expr->binary.lhs);
+        default:
+          break;
+      }
       return;
     }
     case EXPR_FN_CALL: {
@@ -230,9 +256,12 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       typecheck_expr(cx, expr->ternary.else_);
       return;
     }
-    case EXPR_INT_CONST: {
+    case EXPR_CONST: {
       return;
     }
+    default:
+      // unhandled
+      assert(false);
   }
 }
 
@@ -288,6 +317,32 @@ static void typecheck_statement(Context* cx, AstStmt* stmt) {
     case STMT_SWITCH: {
       typecheck_expr(cx, stmt->switch_.cond);
       typecheck_statement(cx, stmt->switch_.body);
+
+      // check case statements and jumps
+      Hashmap* case_conds = hashmap_new();
+      bool has_default = false;
+      vec_for_each(stmt->switch_.case_jumps, AstCaseJump, case_) {
+        if (iter.case_->is_default) {
+          if (has_default) {
+            panic("Found duplicate default in switch statement", 1);
+          }
+          has_default = true;
+          continue;
+        }
+
+        if (iter.case_->const_expr->ty != EXPR_CONST) {
+          panic("Expected constant expression in case but got %d",
+                iter.case_->const_expr->ty);
+        }
+
+        String* stringified_cond =
+            string_format("%d", iter.case_->const_expr->int_const);
+        if (hashmap_get(case_conds, stringified_cond) != NULL) {
+          panic("Found duplicate cond in switch statement", 1);
+        }
+
+        hashmap_put(case_conds, stringified_cond, (void*)1);
+      }
       return;
     }
     case STMT_GOTO:

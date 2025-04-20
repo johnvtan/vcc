@@ -14,6 +14,8 @@ typedef struct AstExpr AstExpr;
 
 typedef enum CType {
   TYPE_INT,
+  TYPE_LONG,
+  TYPE_MAX,  // used for parsing types out
 } CType;
 
 //
@@ -23,10 +25,11 @@ typedef enum CType {
 typedef enum {
   EXPR_BINARY,
   EXPR_UNARY,
-  EXPR_INT_CONST,
+  EXPR_CONST,
   EXPR_VAR,
   EXPR_TERNARY,
   EXPR_FN_CALL,
+  EXPR_CAST,
 } AstExprType;
 
 struct AstExpr {
@@ -38,8 +41,10 @@ struct AstExpr {
   CType c_type;
 
   union {
-    // EXPR_FACT
+    // EXPR_CONST && c_type == TYPE_INT
     int int_const;
+    // EXPR_CONST && c_type == TYPE_LONG
+    long long_const;
 
     // EXPR_UNARY
     struct {
@@ -102,6 +107,12 @@ struct AstExpr {
       // Vec<AstExpr>
       Vec* args;
     } fn_call;
+
+    // EXPR_CAST
+    struct {
+      CType target_type;
+      AstExpr* expr;
+    } cast;
   };
 };
 
@@ -139,6 +150,8 @@ typedef struct {
 
     struct {
       String* name;
+
+      CType return_type;
 
       // Vec<AstFnParam>
       Vec* params;

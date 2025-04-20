@@ -170,6 +170,10 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
     n++;
   }
 
+  if (!n) {
+    return false;
+  }
+
   // Determine the out token type based on the suffx.
   // An integral suffix (for now) is only one character. Eventually, we'll need
   // to handle suffixes with multiple characters, like UL.
@@ -178,8 +182,9 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
   switch (next_char) {
     case 'l':
     case 'L':
+      n++;
       out_ty = TK_LONG_CONST;
-      next_char = file_pos_peek_char_at(pos, n + 1);
+      next_char = file_pos_peek_char_at(pos, n);
       break;
     default:
       break;
@@ -188,12 +193,14 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
   // TODO: we have to check that the number ends at a word boundary.
   // Currently we check this by looking at the next character and seeing if it's
   // part of some malformed ident, but is this the right way to check?
-  if (!n || is_ident_char(next_char)) {
+  if (is_ident_char(next_char)) {
     return false;
   }
 
   out_token->ty = out_ty;
   out_token->pos = *pos;
+
+  // Note: content will contain the suffix if it exists.
   out_token->content = string_substring(pos->contents, pos->idx, n);
   return true;
 }

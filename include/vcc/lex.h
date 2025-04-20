@@ -10,7 +10,6 @@ typedef enum {
   // keywords
   TK_INT,
   TK_LONG,
-
   TK_VOID,
   TK_RETURN,
   TK_OPEN_PAREN,
@@ -55,10 +54,8 @@ typedef enum {
   TK_CASE,
   TK_DEFAULT,
   TK_COMMA,
-
   TK_STATIC,
   TK_EXTERN,
-
   TK_IDENT,
   TK_INT_CONST,
   TK_LONG_CONST,

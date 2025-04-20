@@ -378,7 +378,8 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         return gen_binary(expr, out);
       }
     }
-    case EXPR_INT_CONST:
+    case EXPR_CONST:
+      assert(expr->c_type == TYPE_INT);
       return constant(expr->int_const);
     case EXPR_UNARY:
       return gen_unary(expr, out);

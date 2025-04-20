@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <vcc/ast.h>
 #include <vcc/hashmap.h>
@@ -146,37 +147,17 @@ static Token expect(ParseContext* cx, TokenType ty) {
   return curr;
 }
 
-static inline void assert_lvalue(ParseContext* cx, AstExpr* val) {
-  if (val->ty != EXPR_VAR) {
-    emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
-    exit(-1);
-  }
-
-  if (val->c_type != TYPE_INT) {
-    emit_error_at(cx, "LHS of assign not an lvalue: %u", val->ty);
-    exit(-1);
-  }
-}
-
 //
 // AST type parsing
 //
 
 static bool is_type_specifier(TokenType t) {
   switch (t) {
+    case TK_LONG:
     case TK_INT:
       return true;
     default:
       return false;
-  }
-}
-
-static CType to_type_specifier(TokenType t) {
-  switch (t) {
-    case TK_INT:
-      return TYPE_INT;
-    default:
-      panic("invalid TokenType %d for to_type_specifier", t);
   }
 }
 
@@ -201,13 +182,35 @@ static StorageClass to_storage_class(TokenType t) {
   }
 }
 
+// Takes a Vec<TokenType> and returns the single CType this corresponds to.
+static CType specs_to_ctype(Vec* specs) {
+  size_t int_counts = 0;
+  size_t long_counts = 0;
+  vec_for_each(specs, TokenType, ty) {
+    if (*iter.ty == TK_INT) {
+      int_counts++;
+    } else if (*iter.ty == TK_LONG) {
+      long_counts++;
+    } else {
+      assert(false);
+    }
+  }
+
+  if (int_counts > 1 || long_counts > 1) {
+    panic("Invalid type specifier: got %zu int %zu long", int_counts,
+          long_counts);
+  }
+
+  return long_counts ? TYPE_LONG : TYPE_INT;
+}
+
 typedef struct ParsedSpecifiers {
   CType c_type;
   StorageClass storage_class;
 } ParsedSpecifiers;
 
 static ParsedSpecifiers parse_specifiers(ParseContext* cx) {
-  Vec* c_types = vec_new(sizeof(CType));
+  Vec* c_tk_types = vec_new(sizeof(TokenType));
   Vec* storage_classes = vec_new(sizeof(StorageClass));
 
   while (true) {
@@ -215,8 +218,7 @@ static ParsedSpecifiers parse_specifiers(ParseContext* cx) {
     if (is_type_specifier(t.ty)) {
       // emit_error_no_pos("Found type spec %s", cstring(t.content));
       consume(cx);
-      CType c_type = to_type_specifier(t.ty);
-      vec_push(c_types, (void*)&c_type);
+      vec_push(c_tk_types, (void*)&t.ty);
     } else if (is_storage_class(t.ty)) {
       // emit_error_no_pos("Found type spec %s", cstring(t.content));
       consume(cx);
@@ -227,16 +229,15 @@ static ParsedSpecifiers parse_specifiers(ParseContext* cx) {
     }
   }
 
-  if (c_types->len != 1) {
-    panic("Invalid type specifiers: %u", c_types->len);
-  }
-
   if (storage_classes->len > 1) {
     panic("Invalid storage classes: %u", storage_classes->len);
   }
+  if (c_tk_types->len == 0) {
+    panic("Missing type specifiers", 1);
+  }
 
   ParsedSpecifiers specs;
-  specs.c_type = *(CType*)vec_get(c_types, 0);
+  specs.c_type = specs_to_ctype(c_tk_types);
   specs.storage_class = SC_NONE;
   if (storage_classes->len) {
     specs.storage_class = *(StorageClass*)vec_get(storage_classes, 0);
@@ -329,11 +330,24 @@ static AstExpr* parse_variable(ParseContext* cx) {
 }
 
 static AstExpr* parse_primary(ParseContext* cx) {
-  if (match(cx, TK_INT_CONST)) {
+  if (match(cx, TK_INT_CONST) || match(cx, TK_LONG_CONST)) {
     Token t = consume(cx);
-    AstExpr* int_const = expr(EXPR_INT_CONST);
-    int_const->int_const = strtol(cstring(t.content), NULL, 10);
-    return int_const;
+    AstExpr* constant = expr(EXPR_CONST);
+    uint64_t parsed = strtoll(cstring(t.content), NULL, 10);
+    if (parsed > LONG_MAX) {
+      panic("Parsed integer constant too large: %llu", parsed);
+    }
+
+    // For integer constants, we can implicitly decide that it's a long
+    // constant if the parsed value is greater than INT_MAX.
+    if (parsed <= INT_MAX && t.ty == TK_INT_CONST) {
+      constant->c_type = TYPE_INT;
+      constant->int_const = parsed;
+    } else {
+      constant->c_type = TYPE_LONG;
+      constant->long_const = parsed;
+    }
+    return constant;
   }
 
   if (match(cx, TK_IDENT)) {
@@ -374,7 +388,6 @@ static AstExpr* parse_postfix_unary(ParseContext* cx) {
   while (is_postfix_op(peek(cx).ty)) {
     if (match(cx, TK_PLUSPLUS)) {
       consume(cx);
-      assert_lvalue(cx, e);
       AstExpr* postfix = expr(EXPR_UNARY);
       postfix->unary.op = UNARY_POSTINC;
       postfix->unary.expr = e;
@@ -384,7 +397,6 @@ static AstExpr* parse_postfix_unary(ParseContext* cx) {
 
     if (match(cx, TK_DASHDASH)) {
       consume(cx);
-      assert_lvalue(cx, e);
       AstExpr* postfix = expr(EXPR_UNARY);
       postfix->unary.op = UNARY_POSTDEC;
       postfix->unary.expr = e;
@@ -426,7 +438,6 @@ static AstExpr* parse_prefix_unary(ParseContext* cx) {
     AstExpr* e = expr(EXPR_UNARY);
     e->unary.op = UNARY_PREINC;
     e->unary.expr = parse_prefix_unary(cx);
-    assert_lvalue(cx, e->unary.expr);
     return e;
   }
 
@@ -435,7 +446,21 @@ static AstExpr* parse_prefix_unary(ParseContext* cx) {
     AstExpr* e = expr(EXPR_UNARY);
     e->unary.op = UNARY_PREDEC;
     e->unary.expr = parse_prefix_unary(cx);
-    assert_lvalue(cx, e->unary.expr);
+    return e;
+  }
+
+  // Parsing a cast -- need to peek ahead to distinguish between casts and
+  // nested expressions.
+  if (match(cx, TK_OPEN_PAREN) && is_type_specifier(peek_ahead(cx, 1).ty)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_CAST);
+    ParsedSpecifiers specs = parse_specifiers(cx);
+    if (specs.storage_class != SC_NONE) {
+      panic("Illegal cast to storage class %u", specs.storage_class);
+    }
+    e->cast.target_type = specs.c_type;
+    expect(cx, TK_CLOSE_PAREN);
+    e->cast.expr = parse_prefix_unary(cx);
     return e;
   }
 
@@ -506,7 +531,7 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec) {
   while (info.prec > 0 && info.prec <= min_prec) {
     consume(cx);  // consume the token because it is a bin op
     if (info.is_assign) {
-      assert_lvalue(cx, lhs);
+      // assert_lvalue(cx, lhs);
 
       // assigns are right associative
       AstExpr* rhs = parse_expr(cx, info.prec);
@@ -676,28 +701,6 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     vec_pop(cx->break_stack);
     vec_pop(cx->case_stack);
-
-    // Verify cases (e.g., no duplicates).
-    Hashmap* case_conds = hashmap_new();
-    bool has_default = false;
-    vec_for_each(s->switch_.case_jumps, AstCaseJump, case_) {
-      if (iter.case_->is_default) {
-        if (has_default) {
-          panic("Found duplicate default in switch statement", 1);
-        }
-        has_default = true;
-        continue;
-      }
-
-      String* stringified_cond =
-          string_format("%d", iter.case_->const_expr->int_const);
-      if (hashmap_get(case_conds, stringified_cond) != NULL) {
-        panic("Found duplicate cond in switch statement", 1);
-      }
-
-      hashmap_put(case_conds, stringified_cond, (void*)1);
-    }
-
     return s;
   }
 
@@ -714,15 +717,12 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     // Update case jumps in switch statement
     Vec** case_stack = vec_back(cx->case_stack);
     AstCaseJump* case_jump = vec_push_empty(*case_stack);
+
     case_jump->is_default = consume(cx).ty == TK_DEFAULT;
+    case_jump->label = string_copy(s->labeled.label);
     if (!case_jump->is_default) {
       case_jump->const_expr = parse_primary(cx);
-      if (case_jump->const_expr->ty != EXPR_INT_CONST) {
-        panic("Expected constant expression in case but got %d",
-              case_jump->const_expr->ty);
-      }
     }
-    case_jump->label = string_copy(s->labeled.label);
 
     expect(cx, TK_COLON);
 
@@ -1035,8 +1035,6 @@ static String* resolve_variable_decl(ParseContext* cx, ParsedSpecifiers specs,
 }
 
 static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
-  assert(specs.c_type == TYPE_INT);  // TODO: more types.
-
   Token t = expect(cx, TK_IDENT);
 
   // This will check cx->scope for previous declarations and
