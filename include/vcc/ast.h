@@ -50,10 +50,7 @@ struct AstExpr {
   CType c_type;
 
   union {
-    // EXPR_CONST && c_type == TYPE_INT
-    int int_const;
-    // EXPR_CONST && c_type == TYPE_LONG
-    long long_const;
+    CompTimeConst const_;
 
     // EXPR_UNARY
     struct {

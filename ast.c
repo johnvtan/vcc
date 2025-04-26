@@ -341,10 +341,16 @@ static AstExpr* parse_primary(ParseContext* cx) {
     // constant if the parsed value is greater than INT_MAX.
     if (parsed <= INT_MAX && t.ty == TK_INT_CONST) {
       constant->c_type = TYPE_INT;
-      constant->int_const = parsed;
+      constant->const_ = (CompTimeConst){
+          .c_type = TYPE_INT,
+          .int_ = parsed,
+      };
     } else {
       constant->c_type = TYPE_LONG;
-      constant->long_const = parsed;
+      constant->const_ = (CompTimeConst){
+          .c_type = TYPE_LONG,
+          .long_ = parsed,
+      };
     }
     return constant;
   }
@@ -723,7 +729,7 @@ static AstStmt* parse_stmt(ParseContext* cx) {
             "instead",
             e->ty);
       }
-      case_jump->const_expr = to_comptime_const(e);
+      case_jump->const_expr = e->const_;
     }
 
     expect(cx, TK_COLON);
@@ -1066,22 +1072,6 @@ static AstDecl* parse_decl(ParseContext* cx) {
     return parse_function(cx, specs);
   }
   return parse_variable_decl(cx, specs);
-}
-
-CompTimeConst to_comptime_const(AstExpr* e) {
-  assert(e->ty == EXPR_CONST);
-  assert(e->c_type != TYPE_NONE);
-  CompTimeConst ret = {.c_type = e->c_type};
-  switch (e->c_type) {
-    case TYPE_INT:
-      ret.int_ = e->int_const;
-      return ret;
-    case TYPE_LONG:
-      ret.long_ = e->long_const;
-      return ret;
-    default:
-      assert(false);
-  }
 }
 
 AstProgram* parse_ast(Vec* tokens) {

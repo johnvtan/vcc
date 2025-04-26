@@ -84,10 +84,10 @@ static StaticInit to_static_init(AstExpr* e) {
 
   switch (e->c_type) {
     case TYPE_INT:
-      ret.int_ = e->int_const;
+      ret.int_ = e->const_.int_;
       break;
     case TYPE_LONG:
-      ret.int_ = e->long_const;
+      ret.int_ = e->const_.long_;
       break;
     default:
       assert(false);
@@ -429,6 +429,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
     case EXPR_CONST: {
       // Constants have their types populated during parsing.
       assert(expr->c_type != TYPE_NONE);
+      assert(expr->c_type == expr->const_.c_type);
       return;
     }
     case EXPR_CAST: {

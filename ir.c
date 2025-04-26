@@ -23,35 +23,60 @@ static IrVal* var(String* name) {
 }
 
 // Generates a unique temporary IrVal with the name "tmp.n"
-// This is guaranteed to be unique because n increments every time temp() is
+// This is guaranteed to be unique because n increments every time temp(cx) is
 // called. And C variable names aren't allowed to contain periods.
 // IR temps start with a period to ensure they don't conflict with temps created
 // during variable resolution in parsing.
-static IrVal* temp() {
+//
+// This will also add the temporary variable to the symbol table.
+static IrVal* temp(Context* cx, CType c_type) {
   static int n = 0;
-  return var(string_format(".tmp.%d", n++));
+  String* name = string_format(".tmp.%d", n++);
+
+  SymbolTableEntry* st_entry = calloc(1, sizeof(SymbolTableEntry));
+  st_entry->ty = ST_LOCAL_VAR;
+  st_entry->local.c_type = c_type;
+  hashmap_put(cx->symbol_table->map, name, st_entry);
+
+  // TODO: necessary?
+  vec_push(cx->symbol_table->symbols, name);
+
+  return var(name);
 }
 
-static IrVal* constant(int val) {
+static IrVal* constant_int(int val) {
   if (val == 0) {
-    static IrVal zero = {
-        .ty = IR_VAL_CONST,
-        .constant = 0,
-    };
+    static IrVal zero = {.ty = IR_VAL_CONST,
+                         .constant = {
+                             .c_type = TYPE_INT,
+                             .int_ = 0,
+                         }};
     return &zero;
   }
 
   if (val == 1) {
     static IrVal one = {
         .ty = IR_VAL_CONST,
-        .constant = 1,
+        .constant =
+            {
+                .c_type = TYPE_INT,
+                .int_ = 1,
+            },
     };
     return &one;
   }
 
   IrVal* v = calloc(1, sizeof(IrVal));
   v->ty = IR_VAL_CONST;
-  v->constant = val;
+  v->constant.c_type = TYPE_INT;
+  v->constant.int_ = val;
+  return v;
+}
+
+static IrVal* constant(CompTimeConst c) {
+  IrVal* v = calloc(1, sizeof(IrVal));
+  v->ty = IR_VAL_CONST;
+  v->constant = c;
   return v;
 }
 
@@ -138,26 +163,26 @@ static IrVal* gen_unary(Context* cx, AstExpr* expr) {
 
   // Handle pre/postinc unary functions
   if (expr->unary.op == UNARY_PREINC) {
-    push_inst(cx->out, binary(IR_ADD, operand, constant(1), operand));
+    push_inst(cx->out, binary(IR_ADD, operand, constant_int(1), operand));
     return operand;
   }
 
   if (expr->unary.op == UNARY_PREDEC) {
-    push_inst(cx->out, binary(IR_SUB, operand, constant(1), operand));
+    push_inst(cx->out, binary(IR_SUB, operand, constant_int(1), operand));
     return operand;
   }
 
   if (expr->unary.op == UNARY_POSTINC) {
-    IrVal* ret = temp();
+    IrVal* ret = temp(cx, expr->c_type);
     push_inst(cx->out, copy(operand, ret));
-    push_inst(cx->out, binary(IR_ADD, operand, constant(1), operand));
+    push_inst(cx->out, binary(IR_ADD, operand, constant_int(1), operand));
     return ret;
   }
 
   if (expr->unary.op == UNARY_POSTDEC) {
-    IrVal* ret = temp();
+    IrVal* ret = temp(cx, expr->c_type);
     push_inst(cx->out, copy(operand, ret));
-    push_inst(cx->out, binary(IR_SUB, operand, constant(1), operand));
+    push_inst(cx->out, binary(IR_SUB, operand, constant_int(1), operand));
     return ret;
   }
 
@@ -176,7 +201,7 @@ static IrVal* gen_unary(Context* cx, AstExpr* expr) {
     default:
       panic("Unexpected AstFact type: %lu", expr->unary.op);
   }
-  IrVal* dst = temp();
+  IrVal* dst = temp(cx, expr->c_type);
   push_inst(cx->out, unary(unary_op, operand, dst));
   return dst;
 }
@@ -184,7 +209,7 @@ static IrVal* gen_unary(Context* cx, AstExpr* expr) {
 static IrVal* gen_binary(Context* cx, AstExpr* expr) {
   IrVal* lhs = gen_expr(cx, expr->binary.lhs);
   IrVal* rhs = gen_expr(cx, expr->binary.rhs);
-  IrVal* dst = temp();
+  IrVal* dst = temp(cx, expr->c_type);
   IrType op = IR_UNKNOWN;
   switch (expr->binary.op) {
     case BINARY_ADD:
@@ -293,7 +318,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
   switch (expr->ty) {
     case EXPR_TERNARY: {
       IrVal* cond = gen_expr(cx, expr->ternary.cond);
-      IrVal* ternary_result = temp();
+      IrVal* ternary_result = temp(cx, expr->c_type);
 
       // Generate then/else into separate vectors, which get arranged
       // later in call to arrange_conditional.
@@ -327,7 +352,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         IrInstruction false_label = internal_label(".AND_FALSE");
         IrInstruction end_label = internal_label(".AND_END");
 
-        IrVal* result = temp();
+        IrVal* result = temp(cx, expr->c_type);
 
         // <instructions for e1
         IrVal* e1 = gen_expr(cx, expr->binary.lhs);
@@ -342,7 +367,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         push_inst(cx->out, jmp_cnd(IR_JZ, e2, false_label.label));
 
         // result = 1
-        push_inst(cx->out, copy(constant(1), result));
+        push_inst(cx->out, copy(constant_int(1), result));
 
         // jmp AND_END
         push_inst(cx->out, jmp(end_label.label));
@@ -351,7 +376,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         push_inst(cx->out, false_label);
 
         // result = 0
-        push_inst(cx->out, copy(constant(0), result));
+        push_inst(cx->out, copy(constant_int(0), result));
 
         // AND_END
         push_inst(cx->out, end_label);
@@ -361,7 +386,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         IrInstruction true_label = internal_label(".OR_TRUE");
         IrInstruction end_label = internal_label(".OR_END");
 
-        IrVal* result = temp();
+        IrVal* result = temp(cx, expr->c_type);
 
         // <instructions for e1
         IrVal* e1 = gen_expr(cx, expr->binary.lhs);
@@ -376,7 +401,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         push_inst(cx->out, jmp_cnd(IR_JNZ, e2, true_label.label));
 
         // result = 0
-        push_inst(cx->out, copy(constant(0), result));
+        push_inst(cx->out, copy(constant_int(0), result));
 
         // jmp OR_END
         push_inst(cx->out, jmp(end_label.label));
@@ -385,7 +410,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         push_inst(cx->out, true_label);
 
         // result = 1
-        push_inst(cx->out, copy(constant(1), result));
+        push_inst(cx->out, copy(constant_int(1), result));
 
         // OR_END
         push_inst(cx->out, end_label);
@@ -398,8 +423,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
       }
     }
     case EXPR_CONST:
-      assert(expr->c_type == TYPE_INT);
-      return constant(expr->int_const);
+      return constant(expr->const_);
     case EXPR_UNARY:
       return gen_unary(cx, expr);
     case EXPR_VAR:
@@ -412,7 +436,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         vec_push(ir_args, ir_arg);
       }
 
-      IrVal* dst = temp();
+      IrVal* dst = temp(cx, expr->c_type);
       IrInstruction ir_fn_call = {
           .ty = IR_FN_CALL,
           .dst = dst,
@@ -429,7 +453,13 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         return inner;
       }
 
-      IrVal* dst = temp();
+      IrVal* dst = temp(cx, expr->c_type);
+      if (expr->cast.target_type == TYPE_LONG) {
+        push_inst(cx->out, unary(IR_SIGN_EXTEND, inner, dst));
+      } else {
+        push_inst(cx->out, unary(IR_TRUNCATE, inner, dst));
+      }
+      return dst;
     }
     default:
       panic("Unexpected AstExpr type: %lu", expr->ty);
@@ -558,7 +588,9 @@ static void gen_statement(Context* cx, AstStmt* stmt) {
     }
     case STMT_SWITCH: {
       IrVal* cond = gen_expr(cx, stmt->switch_.cond);
-      IrVal* cmp_result = temp();
+
+      // I think cmp always results in an int?
+      IrVal* cmp_result = temp(cx, TYPE_INT);
 
       AstCaseJump* default_case = NULL;
       vec_for_each(stmt->switch_.case_jumps, AstCaseJump, case_jump) {
@@ -568,10 +600,9 @@ static void gen_statement(Context* cx, AstStmt* stmt) {
         }
         // if stmt->switch_.cond == iter.case_jump->const_expr:
         //   jmp iter.case_jump->label.
-        assert(iter.case_jump->const_expr.c_type == TYPE_INT);
-        int const_val = iter.case_jump->const_expr.int_;
         push_inst(cx->out,
-                  binary(IR_EQ, cond, constant(const_val), cmp_result));
+                  binary(IR_EQ, cond, constant(iter.case_jump->const_expr),
+                         cmp_result));
         push_inst(cx->out, jmp_cnd(IR_JNZ, cmp_result, iter.case_jump->label));
       }
 
@@ -646,7 +677,7 @@ static IrFunction* gen_function(AstDecl* ast_function, SymbolTable* st) {
   }
 
   // Always return 0 from every function
-  push_inst(ir_function->instructions, unary_no_dst(IR_RET, constant(0)));
+  push_inst(ir_function->instructions, unary_no_dst(IR_RET, constant_int(0)));
   return ir_function;
 }
 

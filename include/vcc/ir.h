@@ -12,7 +12,7 @@ typedef struct {
   } ty;
 
   union {
-    int constant;
+    CompTimeConst constant;
     String* var;
   };
 } IrVal;

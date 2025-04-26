@@ -63,7 +63,8 @@ static x64_Operand* data(String* ident) {
 static x64_Operand* to_x64_op(IrVal* ir) {
   switch (ir->ty) {
     case IR_VAL_CONST:
-      return imm(ir->constant);
+      assert(ir->constant.c_type == TYPE_INT);
+      return imm(ir->constant.int_);
     case IR_VAL_VAR:
       return pseudo(ir->var);
     default:
@@ -339,7 +340,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
       case IR_UNARY_NOT: {
         IrVal zero = {
             .ty = IR_VAL_CONST,
-            .constant = 0,
+            .constant = {.c_type = TYPE_INT, .int_ = 0},
         };
         comparison(CC_E, &zero, ir->r1, ir->dst, ret->instructions);
         break;
