@@ -60,6 +60,41 @@ static CompTimeConst convert_comptime_const_to(CompTimeConst c,
   return ret;
 }
 
+static StaticInit convert_static_init_to(StaticInit init, CType target_type) {
+  if (init.c_type == target_type) {
+    return init;
+  }
+
+  StaticInit ret = {.c_type = target_type};
+
+  if (target_type == TYPE_INT) {
+    ret.int_ = (int)init.long_;
+  } else {
+    ret.long_ = (long)init.int_;
+  }
+  return ret;
+}
+
+static StaticInit to_static_init(AstExpr* e) {
+  assert(e->ty == EXPR_CONST);
+  StaticInit ret = {
+      .ty = INIT_HAS_VALUE,
+      .c_type = e->c_type,
+  };
+
+  switch (e->c_type) {
+    case TYPE_INT:
+      ret.int_ = e->int_const;
+      break;
+    case TYPE_LONG:
+      ret.int_ = e->long_const;
+      break;
+    default:
+      assert(false);
+  }
+  return ret;
+}
+
 //
 // Symbol table helpers
 //
@@ -131,9 +166,8 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
           decl->var.init->ty);
     }
     static_var.init.ty = INIT_HAS_VALUE;
-    static_var.init.value.c_type = decl->var.init->c_type;
-    static_var.init.value = convert_comptime_const_to(
-        to_comptime_const(decl->var.init), decl->var.init->c_type);
+    static_var.init = convert_static_init_to(to_static_init(decl->var.init),
+                                             decl->var.init->c_type);
   } else if (decl->storage_class == SC_EXTERN) {
     static_var.init.ty = INIT_NONE;
   } else {
@@ -210,11 +244,8 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
                                               .global = false,
                                               .init = {
                                                   .ty = INIT_HAS_VALUE,
-                                                  .value =
-                                                      {
-                                                          .c_type = TYPE_INT,
-                                                          .int_ = 0,
-                                                      },
+                                                  .c_type = TYPE_INT,
+                                                  .int_ = 0,
                                               }}};
 
     if (decl->var.init) {
@@ -224,7 +255,7 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
             "but found %d",
             decl->var.init->ty);
       }
-      new_entry.static_.init.value = to_comptime_const(decl->var.init);
+      new_entry.static_.init = to_static_init(decl->var.init);
     }
 
     symbol_table_put(symbol_table, decl->var.name, new_entry);

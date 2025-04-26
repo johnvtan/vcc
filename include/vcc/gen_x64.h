@@ -106,7 +106,7 @@ typedef struct {
 typedef struct {
   String* name;
   bool global;
-  CompTimeConst init;
+  StaticInit init;
 } x64_StaticVariable;
 
 typedef struct {

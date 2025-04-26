@@ -4,20 +4,28 @@
 #include <vcc/ast.h>
 
 typedef struct {
+  enum {
+    // NOTE: this is ordered by priority. INIT_NONE is lowest priority.
+    // Ensure that priority is maintatined in this definition.
+    INIT_NONE = 0,
+    INIT_TENTATIVE = 1,
+    INIT_HAS_VALUE = 2,
+  } ty;
+
+  // only for INIT_HAS_VALUE
+  struct {
+    CType c_type;
+    union {
+      int int_;
+      long long_;
+    };
+  };
+} StaticInit;
+
+typedef struct {
   CType c_type;
   bool global;
-  struct {
-    enum {
-      // NOTE: this is ordered by priority. INIT_NONE is lowest priority.
-      // Ensure that priority is maintatined in this definition.
-      INIT_NONE = 0,
-      INIT_TENTATIVE = 1,
-      INIT_HAS_VALUE = 2,
-    } ty;
-
-    // INIT_HAS_VALUE
-    CompTimeConst value;
-  } init;
+  StaticInit init;
 } StaticVariableSymbol;
 
 typedef struct {

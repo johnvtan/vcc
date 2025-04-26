@@ -485,6 +485,7 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
   ret->name = ir->name;
   ret->global = ir->global;
   ret->init = ir->init;
+  assert(ret->init.ty != INIT_TENTATIVE);
   return ret;
 }
 

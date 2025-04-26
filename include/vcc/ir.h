@@ -20,6 +20,10 @@ typedef struct {
 typedef enum {
   IR_UNKNOWN,
   IR_RET,
+
+  IR_SIGN_EXTEND,
+  IR_TRUNCATE,
+
   IR_UNARY_COMPLEMENT,
   IR_UNARY_NEG,
   IR_UNARY_NOT,
@@ -76,7 +80,7 @@ typedef struct {
 typedef struct {
   String* name;
   bool global;
-  CompTimeConst init;
+  StaticInit init;
 } IrStaticVariable;
 
 typedef struct {

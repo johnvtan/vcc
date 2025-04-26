@@ -1,10 +1,16 @@
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>  // for memset
 #include <vcc/errors.h>
 #include <vcc/ir.h>
 
-static void gen_block_item(AstBlockItem* block_item, Vec* out);
-static void gen_decl(AstDecl* decl, Vec* out);
+typedef struct {
+  SymbolTable* symbol_table;
+  Vec* out;
+} Context;
+
+static void gen_block_item(Context* cx, AstBlockItem* block_item);
+static void gen_decl(Context* cx, AstDecl* decl);
 
 //
 // Helpers for creating IrVal
@@ -21,7 +27,7 @@ static IrVal* var(String* name) {
 // called. And C variable names aren't allowed to contain periods.
 // IR temps start with a period to ensure they don't conflict with temps created
 // during variable resolution in parsing.
-static IrVal* temp(void) {
+static IrVal* temp() {
   static int n = 0;
   return var(string_format(".tmp.%d", n++));
 }
@@ -126,32 +132,32 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 //
 // Functions that walk the AST and generate IR instructions
 //
-static IrVal* gen_expr(AstExpr* expr, Vec* out);
-static IrVal* gen_unary(AstExpr* expr, Vec* out) {
-  IrVal* operand = gen_expr(expr->unary.expr, out);
+static IrVal* gen_expr(Context* cx, AstExpr* expr);
+static IrVal* gen_unary(Context* cx, AstExpr* expr) {
+  IrVal* operand = gen_expr(cx, expr->unary.expr);
 
   // Handle pre/postinc unary functions
   if (expr->unary.op == UNARY_PREINC) {
-    push_inst(out, binary(IR_ADD, operand, constant(1), operand));
+    push_inst(cx->out, binary(IR_ADD, operand, constant(1), operand));
     return operand;
   }
 
   if (expr->unary.op == UNARY_PREDEC) {
-    push_inst(out, binary(IR_SUB, operand, constant(1), operand));
+    push_inst(cx->out, binary(IR_SUB, operand, constant(1), operand));
     return operand;
   }
 
   if (expr->unary.op == UNARY_POSTINC) {
     IrVal* ret = temp();
-    push_inst(out, copy(operand, ret));
-    push_inst(out, binary(IR_ADD, operand, constant(1), operand));
+    push_inst(cx->out, copy(operand, ret));
+    push_inst(cx->out, binary(IR_ADD, operand, constant(1), operand));
     return ret;
   }
 
   if (expr->unary.op == UNARY_POSTDEC) {
     IrVal* ret = temp();
-    push_inst(out, copy(operand, ret));
-    push_inst(out, binary(IR_SUB, operand, constant(1), operand));
+    push_inst(cx->out, copy(operand, ret));
+    push_inst(cx->out, binary(IR_SUB, operand, constant(1), operand));
     return ret;
   }
 
@@ -171,13 +177,13 @@ static IrVal* gen_unary(AstExpr* expr, Vec* out) {
       panic("Unexpected AstFact type: %lu", expr->unary.op);
   }
   IrVal* dst = temp();
-  push_inst(out, unary(unary_op, operand, dst));
+  push_inst(cx->out, unary(unary_op, operand, dst));
   return dst;
 }
 
-static IrVal* gen_binary(AstExpr* expr, Vec* out) {
-  IrVal* lhs = gen_expr(expr->binary.lhs, out);
-  IrVal* rhs = gen_expr(expr->binary.rhs, out);
+static IrVal* gen_binary(Context* cx, AstExpr* expr) {
+  IrVal* lhs = gen_expr(cx, expr->binary.lhs);
+  IrVal* rhs = gen_expr(cx, expr->binary.rhs);
   IrVal* dst = temp();
   IrType op = IR_UNKNOWN;
   switch (expr->binary.op) {
@@ -218,42 +224,42 @@ static IrVal* gen_binary(AstExpr* expr, Vec* out) {
     default:
       panic("Unexpected binary op: %u", expr->binary.op);
   }
-  push_inst(out, binary(op, lhs, rhs, dst));
+  push_inst(cx->out, binary(op, lhs, rhs, dst));
   return dst;
 }
 
 static inline bool is_assign(int bin_op) { return bin_op >= BINARY_ASSIGN; }
 
-static IrVal* gen_assign(AstExpr* expr, Vec* out) {
+static IrVal* gen_assign(Context* cx, AstExpr* expr) {
   if (expr->binary.lhs->ty != EXPR_VAR) {
     panic("Expected var LHS but got %u", expr->binary.lhs->ty);
   }
 
   // lhs is ultimately where the result of the expression goes
-  IrVal* lhs = gen_expr(expr->binary.lhs, out);
+  IrVal* lhs = gen_expr(cx, expr->binary.lhs);
 
   // rhs is on the right hand of the assign
-  IrVal* rhs = gen_expr(expr->binary.rhs, out);
+  IrVal* rhs = gen_expr(cx, expr->binary.rhs);
 
   // Handle op, which stores the result in lhs
   switch (expr->binary.op) {
     case BINARY_ASSIGN:
-      push_inst(out, copy(rhs, lhs));
+      push_inst(cx->out, copy(rhs, lhs));
       break;
     case BINARY_ADD_ASSIGN:
-      push_inst(out, binary(IR_ADD, lhs, rhs, lhs));
+      push_inst(cx->out, binary(IR_ADD, lhs, rhs, lhs));
       break;
     case BINARY_SUB_ASSIGN:
-      push_inst(out, binary(IR_SUB, lhs, rhs, lhs));
+      push_inst(cx->out, binary(IR_SUB, lhs, rhs, lhs));
       break;
     case BINARY_MUL_ASSIGN:
-      push_inst(out, binary(IR_MUL, lhs, rhs, lhs));
+      push_inst(cx->out, binary(IR_MUL, lhs, rhs, lhs));
       break;
     case BINARY_DIV_ASSIGN:
-      push_inst(out, binary(IR_DIV, lhs, rhs, lhs));
+      push_inst(cx->out, binary(IR_DIV, lhs, rhs, lhs));
       break;
     case BINARY_REM_ASSIGN:
-      push_inst(out, binary(IR_REM, lhs, rhs, lhs));
+      push_inst(cx->out, binary(IR_REM, lhs, rhs, lhs));
       break;
     default:
       panic("Unexpected bin op %u in assign", expr->binary.op);
@@ -265,40 +271,53 @@ static IrVal* gen_assign(AstExpr* expr, Vec* out) {
 // The caller generates then/else into separate vectors of IR instructions.
 // This function arranges them with the appropriate jumps and puts them in
 // |out|. This assumes that |cond| has already been put into |out|.
-static void arrange_conditional(IrVal* cond, Vec* then, Vec* else_, Vec* out) {
+static void arrange_conditional(Context* cx, IrVal* cond, Vec* then,
+                                Vec* else_) {
   IrInstruction else_label = else_ ? internal_label(".COND_ELSE")
                                    : internal_label(".THIS_SHOULDNT_BE_HERE");
   IrInstruction end_label = internal_label(".COND_END");
 
-  push_inst(out,
+  push_inst(cx->out,
             jmp_cnd(IR_JZ, cond, else_ ? else_label.label : end_label.label));
-  vec_concat(out, then);
+  vec_concat(cx->out, then);
   if (else_) {
-    push_inst(out, jmp(end_label.label));
-    push_inst(out, else_label);
-    vec_concat(out, else_);
+    push_inst(cx->out, jmp(end_label.label));
+    push_inst(cx->out, else_label);
+    vec_concat(cx->out, else_);
   }
 
-  push_inst(out, end_label);
+  push_inst(cx->out, end_label);
 }
 
-static IrVal* gen_expr(AstExpr* expr, Vec* out) {
+static IrVal* gen_expr(Context* cx, AstExpr* expr) {
   switch (expr->ty) {
     case EXPR_TERNARY: {
-      IrVal* cond = gen_expr(expr->ternary.cond, out);
+      IrVal* cond = gen_expr(cx, expr->ternary.cond);
       IrVal* ternary_result = temp();
 
       // Generate then/else into separate vectors, which get arranged
       // later in call to arrange_conditional.
       Vec* then_ir = vec_new(sizeof(IrInstruction));
-      IrVal* then_result = gen_expr(expr->ternary.then, then_ir);
-      push_inst(then_ir, copy(then_result, ternary_result));
+      {
+        Context cx2 = {
+            .symbol_table = cx->symbol_table,
+            .out = then_ir,
+        };
+        IrVal* then_result = gen_expr(&cx2, expr->ternary.then);
+        push_inst(then_ir, copy(then_result, ternary_result));
+      }
 
       Vec* else_ir = vec_new(sizeof(IrInstruction));
-      IrVal* else_result = gen_expr(expr->ternary.else_, else_ir);
-      push_inst(else_ir, copy(else_result, ternary_result));
+      {
+        Context cx2 = {
+            .symbol_table = cx->symbol_table,
+            .out = else_ir,
+        };
+        IrVal* else_result = gen_expr(&cx2, expr->ternary.else_);
+        push_inst(else_ir, copy(else_result, ternary_result));
+      }
 
-      arrange_conditional(cond, then_ir, else_ir, out);
+      arrange_conditional(cx, cond, then_ir, else_ir);
 
       return ternary_result;
     }
@@ -311,31 +330,31 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         IrVal* result = temp();
 
         // <instructions for e1
-        IrVal* e1 = gen_expr(expr->binary.lhs, out);
+        IrVal* e1 = gen_expr(cx, expr->binary.lhs);
 
         // jz e1, AND_FALSE
-        push_inst(out, jmp_cnd(IR_JZ, e1, false_label.label));
+        push_inst(cx->out, jmp_cnd(IR_JZ, e1, false_label.label));
 
         // <instructions for e2>
-        IrVal* e2 = gen_expr(expr->binary.rhs, out);
+        IrVal* e2 = gen_expr(cx, expr->binary.rhs);
 
         // jz e2, AND_FALSE
-        push_inst(out, jmp_cnd(IR_JZ, e2, false_label.label));
+        push_inst(cx->out, jmp_cnd(IR_JZ, e2, false_label.label));
 
         // result = 1
-        push_inst(out, copy(constant(1), result));
+        push_inst(cx->out, copy(constant(1), result));
 
         // jmp AND_END
-        push_inst(out, jmp(end_label.label));
+        push_inst(cx->out, jmp(end_label.label));
 
         // AND_FALSE:
-        push_inst(out, false_label);
+        push_inst(cx->out, false_label);
 
         // result = 0
-        push_inst(out, copy(constant(0), result));
+        push_inst(cx->out, copy(constant(0), result));
 
         // AND_END
-        push_inst(out, end_label);
+        push_inst(cx->out, end_label);
 
         return result;
       } else if (expr->binary.op == BINARY_OR) {
@@ -345,51 +364,51 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
         IrVal* result = temp();
 
         // <instructions for e1
-        IrVal* e1 = gen_expr(expr->binary.lhs, out);
+        IrVal* e1 = gen_expr(cx, expr->binary.lhs);
 
         // jnz e1, OR_TRUE
-        push_inst(out, jmp_cnd(IR_JNZ, e1, true_label.label));
+        push_inst(cx->out, jmp_cnd(IR_JNZ, e1, true_label.label));
 
         // <instructions for e2>
-        IrVal* e2 = gen_expr(expr->binary.rhs, out);
+        IrVal* e2 = gen_expr(cx, expr->binary.rhs);
 
         // jnz e2, OR_TRUE
-        push_inst(out, jmp_cnd(IR_JNZ, e2, true_label.label));
+        push_inst(cx->out, jmp_cnd(IR_JNZ, e2, true_label.label));
 
         // result = 0
-        push_inst(out, copy(constant(0), result));
+        push_inst(cx->out, copy(constant(0), result));
 
         // jmp OR_END
-        push_inst(out, jmp(end_label.label));
+        push_inst(cx->out, jmp(end_label.label));
 
         // OR_TRUE:
-        push_inst(out, true_label);
+        push_inst(cx->out, true_label);
 
         // result = 1
-        push_inst(out, copy(constant(1), result));
+        push_inst(cx->out, copy(constant(1), result));
 
         // OR_END
-        push_inst(out, end_label);
+        push_inst(cx->out, end_label);
 
         return result;
       } else if (is_assign(expr->binary.op)) {
-        return gen_assign(expr, out);
+        return gen_assign(cx, expr);
       } else {
-        return gen_binary(expr, out);
+        return gen_binary(cx, expr);
       }
     }
     case EXPR_CONST:
       assert(expr->c_type == TYPE_INT);
       return constant(expr->int_const);
     case EXPR_UNARY:
-      return gen_unary(expr, out);
+      return gen_unary(cx, expr);
     case EXPR_VAR:
       return var(expr->ident);
     case EXPR_FN_CALL: {
       // Generate instructions to evaluate each argument.
       Vec* ir_args = vec_new(sizeof(IrVal));
       vec_for_each(expr->fn_call.args, AstExpr, arg) {
-        IrVal* ir_arg = gen_expr(iter.arg, out);
+        IrVal* ir_arg = gen_expr(cx, iter.arg);
         vec_push(ir_args, ir_arg);
       }
 
@@ -401,53 +420,71 @@ static IrVal* gen_expr(AstExpr* expr, Vec* out) {
           .args = ir_args,
       };
 
-      push_inst(out, ir_fn_call);
+      push_inst(cx->out, ir_fn_call);
       return dst;
+    }
+    case EXPR_CAST: {
+      IrVal* inner = gen_expr(cx, expr->cast.expr);
+      if (expr->cast.target_type == expr->cast.expr->c_type) {
+        return inner;
+      }
+
+      IrVal* dst = temp();
     }
     default:
       panic("Unexpected AstExpr type: %lu", expr->ty);
   }
 }
 
-static void gen_statement(AstStmt* stmt, Vec* out) {
+static void gen_statement(Context* cx, AstStmt* stmt) {
   switch (stmt->ty) {
     case STMT_RETURN: {
-      IrVal* expr = gen_expr(stmt->expr, out);
-      push_inst(out, unary_no_dst(IR_RET, expr));
+      IrVal* expr = gen_expr(cx, stmt->expr);
+      push_inst(cx->out, unary_no_dst(IR_RET, expr));
       return;
     }
     case STMT_EXPR:
-      gen_expr(stmt->expr, out);
+      gen_expr(cx, stmt->expr);
       return;
     case STMT_NULL:
       return;
     case STMT_GOTO:
-      push_inst(out, jmp(stmt->ident));
+      push_inst(cx->out, jmp(stmt->ident));
       return;
     case STMT_LABELED: {
-      push_inst(out, label(stmt->labeled.label));
-      gen_statement(stmt->labeled.stmt, out);
+      push_inst(cx->out, label(stmt->labeled.label));
+      gen_statement(cx, stmt->labeled.stmt);
       return;
     }
     case STMT_COMPOUND: {
       vec_for_each(stmt->block, AstBlockItem, block_item) {
-        gen_block_item(iter.block_item, out);
+        gen_block_item(cx, iter.block_item);
       }
       return;
     }
     case STMT_IF: {
-      IrVal* cond = gen_expr(stmt->if_.cond, out);
+      IrVal* cond = gen_expr(cx, stmt->if_.cond);
 
       Vec* then_ir = vec_new(sizeof(IrInstruction));
-      gen_statement(stmt->if_.then, then_ir);
+      {
+        Context cx2 = {
+            .symbol_table = cx->symbol_table,
+            .out = then_ir,
+        };
+        gen_statement(&cx2, stmt->if_.then);
+      }
 
       Vec* else_ir = NULL;
       if (stmt->if_.else_) {
         else_ir = vec_new(sizeof(IrInstruction));
-        gen_statement(stmt->if_.else_, else_ir);
+        Context cx2 = {
+            .symbol_table = cx->symbol_table,
+            .out = else_ir,
+        };
+        gen_statement(&cx2, stmt->if_.else_);
       }
 
-      arrange_conditional(cond, then_ir, else_ir, out);
+      arrange_conditional(cx, cond, then_ir, else_ir);
       return;
     }
     case STMT_WHILE: {
@@ -457,12 +494,12 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       // <instructions for body>
       // jmp .CONTINUE_LABEL
       // .BREAK_LABEL:
-      push_inst(out, label(stmt->while_.continue_label));
-      IrVal* cond = gen_expr(stmt->while_.cond, out);
-      push_inst(out, jmp_cnd(IR_JZ, cond, stmt->while_.break_label));
-      gen_statement(stmt->while_.body, out);
-      push_inst(out, jmp(stmt->while_.continue_label));
-      push_inst(out, label(stmt->while_.break_label));
+      push_inst(cx->out, label(stmt->while_.continue_label));
+      IrVal* cond = gen_expr(cx, stmt->while_.cond);
+      push_inst(cx->out, jmp_cnd(IR_JZ, cond, stmt->while_.break_label));
+      gen_statement(cx, stmt->while_.body);
+      push_inst(cx->out, jmp(stmt->while_.continue_label));
+      push_inst(cx->out, label(stmt->while_.break_label));
       return;
     }
     case STMT_DOWHILE: {
@@ -473,13 +510,13 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       // jnz tmp, .DOWHILE.START
       // .BREAK_LABEL:
       IrInstruction start = internal_label(".DOWHILE.START");
-      push_inst(out, start);
+      push_inst(cx->out, start);
 
-      gen_statement(stmt->while_.body, out);
-      push_inst(out, label(stmt->while_.continue_label));
-      IrVal* cond = gen_expr(stmt->while_.cond, out);
-      push_inst(out, jmp_cnd(IR_JNZ, cond, start.label));
-      push_inst(out, label(stmt->while_.break_label));
+      gen_statement(cx, stmt->while_.body);
+      push_inst(cx->out, label(stmt->while_.continue_label));
+      IrVal* cond = gen_expr(cx, stmt->while_.cond);
+      push_inst(cx->out, jmp_cnd(IR_JNZ, cond, start.label));
+      push_inst(cx->out, label(stmt->while_.break_label));
       return;
     }
     case STMT_FOR: {
@@ -496,31 +533,31 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
       // This is a union; just checking that an init exists.
       if (stmt->for_.init.ty != FOR_INIT_NONE) {
         if (stmt->for_.init.ty == FOR_INIT_DECL) {
-          gen_decl(stmt->for_.init.decl, out);
+          gen_decl(cx, stmt->for_.init.decl);
         } else {
-          gen_expr(stmt->for_.init.expr, out);
+          gen_expr(cx, stmt->for_.init.expr);
         }
       }
 
       IrInstruction start = internal_label(".FOR.START");
-      push_inst(out, start);
+      push_inst(cx->out, start);
 
       if (stmt->for_.cond) {
-        IrVal* cond = gen_expr(stmt->for_.cond, out);
-        push_inst(out, jmp_cnd(IR_JZ, cond, stmt->for_.break_label));
+        IrVal* cond = gen_expr(cx, stmt->for_.cond);
+        push_inst(cx->out, jmp_cnd(IR_JZ, cond, stmt->for_.break_label));
       }
 
-      gen_statement(stmt->for_.body, out);
-      push_inst(out, label(stmt->for_.continue_label));
+      gen_statement(cx, stmt->for_.body);
+      push_inst(cx->out, label(stmt->for_.continue_label));
       if (stmt->for_.post) {
-        gen_expr(stmt->for_.post, out);
+        gen_expr(cx, stmt->for_.post);
       }
-      push_inst(out, jmp(start.label));
-      push_inst(out, label(stmt->for_.break_label));
+      push_inst(cx->out, jmp(start.label));
+      push_inst(cx->out, label(stmt->for_.break_label));
       return;
     }
     case STMT_SWITCH: {
-      IrVal* cond = gen_expr(stmt->switch_.cond, out);
+      IrVal* cond = gen_expr(cx, stmt->switch_.cond);
       IrVal* cmp_result = temp();
 
       AstCaseJump* default_case = NULL;
@@ -533,21 +570,22 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
         //   jmp iter.case_jump->label.
         assert(iter.case_jump->const_expr.c_type == TYPE_INT);
         int const_val = iter.case_jump->const_expr.int_;
-        push_inst(out, binary(IR_EQ, cond, constant(const_val), cmp_result));
-        push_inst(out, jmp_cnd(IR_JNZ, cmp_result, iter.case_jump->label));
+        push_inst(cx->out,
+                  binary(IR_EQ, cond, constant(const_val), cmp_result));
+        push_inst(cx->out, jmp_cnd(IR_JNZ, cmp_result, iter.case_jump->label));
       }
 
       if (default_case) {
         // no condition for default: jump to default
         // jmp default_case->label
-        push_inst(out, jmp(default_case->label));
+        push_inst(cx->out, jmp(default_case->label));
       } else {
         // No default case -- just skip the body
-        push_inst(out, jmp(stmt->switch_.break_label));
+        push_inst(cx->out, jmp(stmt->switch_.break_label));
       }
 
-      gen_statement(stmt->switch_.body, out);
-      push_inst(out, label(stmt->switch_.break_label));
+      gen_statement(cx, stmt->switch_.body);
+      push_inst(cx->out, label(stmt->switch_.break_label));
       return;
     }
     default:
@@ -555,7 +593,7 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
   }
 }
 
-static void gen_decl(AstDecl* decl, Vec* out) {
+static void gen_decl(Context* cx, AstDecl* decl) {
   if (decl->ty != AST_DECL_VAR) {
     // Ignore function declarations in IR stage.
     return;
@@ -573,15 +611,15 @@ static void gen_decl(AstDecl* decl, Vec* out) {
 
   // Rewrite initialization as an assignment.
   IrVal* lhs = var(decl->var.name);
-  IrVal* rhs = gen_expr(decl->var.init, out);
-  push_inst(out, copy(rhs, lhs));
+  IrVal* rhs = gen_expr(cx, decl->var.init);
+  push_inst(cx->out, copy(rhs, lhs));
 }
 
-static void gen_block_item(AstBlockItem* block_item, Vec* out) {
+static void gen_block_item(Context* cx, AstBlockItem* block_item) {
   if (block_item->ty == BLOCK_DECL) {
-    gen_decl(block_item->decl, out);
+    gen_decl(cx, block_item->decl);
   } else {
-    gen_statement(block_item->stmt, out);
+    gen_statement(cx, block_item->stmt);
   }
 }
 
@@ -598,8 +636,13 @@ static IrFunction* gen_function(AstDecl* ast_function, SymbolTable* st) {
   vec_for_each(ast_function->fn.params, AstFnParam, param) {
     vec_push(ir_function->params, iter.param->ident);
   }
+
+  Context cx = {
+      .symbol_table = st,
+      .out = ir_function->instructions,
+  };
   vec_for_each(ast_function->fn.body, AstBlockItem, block_item) {
-    gen_block_item(iter.block_item, ir_function->instructions);
+    gen_block_item(&cx, iter.block_item);
   }
 
   // Always return 0 from every function
@@ -621,11 +664,15 @@ IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
   IrStaticVariable* ir_static_variable = calloc(1, sizeof(IrStaticVariable));
   ir_static_variable->name = var;
   ir_static_variable->global = st_entry->static_.global;
-  ir_static_variable->init.c_type = TYPE_INT;
-  ir_static_variable->init.int_ = 0;
+  ir_static_variable->init = st_entry->static_.init;
 
-  if (st_entry->static_.init.ty == INIT_HAS_VALUE) {
-    ir_static_variable->init = st_entry->static_.init.value;
+  // Handle tentative initialization here. Next pass should never have to deal
+  // with INIT_TENTATIVE.
+  if (ir_static_variable->init.ty == INIT_TENTATIVE) {
+    // zero it out to ensure that the value is zerod.
+    memset(&ir_static_variable->init, 0, sizeof(ir_static_variable->init));
+    ir_static_variable->init.ty = INIT_HAS_VALUE;
+    ir_static_variable->init.c_type = st_entry->static_.c_type;
   }
 
   return ir_static_variable;
