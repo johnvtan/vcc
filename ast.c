@@ -255,7 +255,6 @@ static AstExpr* parse_expr(ParseContext* cx, int min_prec);
 static AstExpr* expr(AstExprType ty) {
   AstExpr* e = calloc(1, sizeof(AstExpr));
   e->ty = ty;
-  e->c_type = TYPE_INT;
   return e;
 }
 
@@ -691,10 +690,6 @@ static AstStmt* parse_stmt(ParseContext* cx) {
 
     expect(cx, TK_OPEN_PAREN);
     s->switch_.cond = parse_expr(cx, PREC_MIN);
-    CType cond_type = s->switch_.cond->c_type;
-    if (cond_type != TYPE_INT) {
-      panic("Cannot switch on non-integer", 1);
-    }
     expect(cx, TK_CLOSE_PAREN);
 
     s->switch_.body = parse_stmt(cx);
@@ -721,7 +716,14 @@ static AstStmt* parse_stmt(ParseContext* cx) {
     case_jump->is_default = consume(cx).ty == TK_DEFAULT;
     case_jump->label = string_copy(s->labeled.label);
     if (!case_jump->is_default) {
-      case_jump->const_expr = parse_primary(cx);
+      AstExpr* e = parse_primary(cx);
+      if (e->ty != EXPR_CONST) {
+        panic(
+            "Case expressions must be integer constants, but got type %u "
+            "instead",
+            e->ty);
+      }
+      case_jump->const_expr = to_comptime_const(e);
     }
 
     expect(cx, TK_COLON);
@@ -928,6 +930,7 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map,
   decl->fn.name = t.content;
   decl->fn.params = parse_parameter_list(cx, ident_map);
   decl->storage_class = specs.storage_class;
+  decl->fn.return_type = specs.c_type;
 
   // Resolve function identifier.
   ResolvedIdentifier resolved = resolve_identifier(cx->scope, decl->fn.name);
@@ -1045,6 +1048,7 @@ static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
   decl->ty = AST_DECL_VAR;
   decl->var.name = unique_var_name;
   decl->storage_class = specs.storage_class;
+  decl->var.c_type = specs.c_type;
 
   // Parse initializer if it exists.
   if (peek(cx).ty == TK_EQ) {
@@ -1062,6 +1066,22 @@ static AstDecl* parse_decl(ParseContext* cx) {
     return parse_function(cx, specs);
   }
   return parse_variable_decl(cx, specs);
+}
+
+CompTimeConst to_comptime_const(AstExpr* e) {
+  assert(e->ty == EXPR_CONST);
+  assert(e->c_type != TYPE_NONE);
+  CompTimeConst ret = {.c_type = e->c_type};
+  switch (e->c_type) {
+    case TYPE_INT:
+      ret.int_ = e->int_const;
+      return ret;
+    case TYPE_LONG:
+      ret.long_ = e->long_const;
+      return ret;
+    default:
+      assert(false);
+  }
 }
 
 AstProgram* parse_ast(Vec* tokens) {

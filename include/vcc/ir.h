@@ -76,7 +76,7 @@ typedef struct {
 typedef struct {
   String* name;
   bool global;
-  int init;
+  CompTimeConst init;
 } IrStaticVariable;
 
 typedef struct {

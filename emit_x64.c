@@ -224,7 +224,9 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
     emit(cx, "\t.globl " ASM_SYMBOL_PREFIX "%s\n", cstring(sv->name));
   }
 
-  if (sv->init) {
+  assert(sv->init.c_type == TYPE_INT);
+
+  if (sv->init.int_) {
     emit(cx, ".data\n");
   } else {
     emit(cx, ".bss\n");
@@ -232,8 +234,8 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
 
   emit(cx, "\t.balign 4\n");
   emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
-  if (sv->init) {
-    emit(cx, "\t.long %d\n", sv->init);
+  if (sv->init.int_) {
+    emit(cx, "\t.long %d\n", sv->init.int_);
   } else {
     emit(cx, "\t.zero 4\n");
   }

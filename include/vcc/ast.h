@@ -13,10 +13,19 @@ typedef struct AstExpr AstExpr;
 //
 
 typedef enum CType {
+  TYPE_NONE = 0,  // used for catching errors
   TYPE_INT,
   TYPE_LONG,
-  TYPE_MAX,  // used for parsing types out
 } CType;
+
+// Container for a compile time constant.
+typedef struct {
+  CType c_type;
+  union {
+    int int_;
+    long long_;
+  };
+} CompTimeConst;
 
 //
 // AST expression definition
@@ -175,7 +184,7 @@ typedef struct {
 } AstBlockItem;
 
 typedef struct {
-  AstExpr* const_expr;
+  CompTimeConst const_expr;
   bool is_default;
   String* label;
 } AstCaseJump;
@@ -272,5 +281,6 @@ typedef struct {
 } AstProgram;
 
 AstProgram* parse_ast(Vec* token);
+CompTimeConst to_comptime_const(AstExpr* e);
 
 #endif  // VCC_AST_H

@@ -531,7 +531,8 @@ static void gen_statement(AstStmt* stmt, Vec* out) {
         }
         // if stmt->switch_.cond == iter.case_jump->const_expr:
         //   jmp iter.case_jump->label.
-        int const_val = iter.case_jump->const_expr->int_const;
+        assert(iter.case_jump->const_expr.c_type == TYPE_INT);
+        int const_val = iter.case_jump->const_expr.int_;
         push_inst(out, binary(IR_EQ, cond, constant(const_val), cmp_result));
         push_inst(out, jmp_cnd(IR_JNZ, cmp_result, iter.case_jump->label));
       }
@@ -620,10 +621,12 @@ IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
   IrStaticVariable* ir_static_variable = calloc(1, sizeof(IrStaticVariable));
   ir_static_variable->name = var;
   ir_static_variable->global = st_entry->static_.global;
+  ir_static_variable->init.c_type = TYPE_INT;
+  ir_static_variable->init.int_ = 0;
+
   if (st_entry->static_.init.ty == INIT_HAS_VALUE) {
-    ir_static_variable->init = st_entry->static_.init.val;
+    ir_static_variable->init = st_entry->static_.init.value;
   }
-  // if INIT_TENTATIVE, init will be 0 because ir_static_variable is calloc'd.
 
   return ir_static_variable;
 }

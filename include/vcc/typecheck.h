@@ -16,7 +16,7 @@ typedef struct {
     } ty;
 
     // INIT_HAS_VALUE
-    int val;
+    CompTimeConst value;
   } init;
 } StaticVariableSymbol;
 
@@ -27,13 +27,18 @@ typedef struct {
     ST_FN,
   } ty;
 
+  // TODO: have a single CType field used by everything in the symbol table.
+
   // ST_FN
   struct {
-    size_t num_params;
     bool defined;
 
     // visibility
     bool global;
+    CType return_type;
+
+    // Vec<AstFnParam>
+    Vec* params;
   } fn;
 
   // ST_STATIC_VAR
