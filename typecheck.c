@@ -27,6 +27,7 @@ static CType get_common_type(CType t1, CType t2) {
 
 static AstExpr* cast(AstExpr* e, CType target_type) {
   AstExpr* cast_expr = calloc(1, sizeof(AstExpr));
+  assert(e->c_type != target_type);
   cast_expr->ty = EXPR_CAST;
   cast_expr->cast.expr = e;
 
@@ -272,6 +273,7 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   symbol_table_put(symbol_table, decl->var.name, new_entry);
   if (decl->var.init) {
     typecheck_expr(cx, decl->var.init);
+    decl->var.init = convert_to(decl->var.init, decl->var.c_type);
   }
 }
 

@@ -92,6 +92,9 @@ typedef struct {
   SymbolTable* symbol_table;
 } IrProgram;
 
+// Helpers that are used in gen_x64.c
+CompTimeConst zero(CType c_type);
+IrVal* constant(CompTimeConst c);
 IrProgram* gen_ir(AstProgram* program, SymbolTable* symbol_table);
 
 #endif  // VCC_IR_H

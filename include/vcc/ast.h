@@ -22,6 +22,7 @@ typedef enum CType {
 typedef struct {
   CType c_type;
   union {
+    // TODO: just use a single 64 bit integer?
     int int_;
     long long_;
   };

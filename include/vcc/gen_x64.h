@@ -24,7 +24,17 @@ typedef enum {
   REG_R9,
   REG_R10,
   REG_R11,
+  REG_SP,
 } x64_RegType;
+
+// Determines the suffix used for some instructions.
+// E.g. a MOV with a QUADWORD size will be movq.
+// The value for each enum variant is the suffix used for
+// the instruction.
+typedef enum {
+  QUADWORD = 'q',
+  LONGWORD = 'l',
+} x64_Size;
 
 typedef struct {
   x64_OperandType ty;
@@ -43,11 +53,12 @@ typedef struct {
   // X64_OP_LABEL or X64_OP_DATA
   String* ident;
 
-  int size;
+  x64_Size size;
 } x64_Operand;
 
 typedef enum {
   X64_MOV,
+  X64_MOVSX,  // move with sign extend
   X64_RET,
   X64_NEG,
   X64_NOT,
@@ -61,8 +72,6 @@ typedef enum {
   X64_JMPCC,
   X64_SETCC,
   X64_LABEL,
-  X64_ALLOC_STACK,
-  X64_DEALLOC_STACK,
   X64_PUSH,
   X64_CALL,
 } x64_InstructionType;
@@ -78,6 +87,7 @@ typedef enum {
 
 typedef struct {
   x64_InstructionType ty;
+  x64_Size size;
 
   // Most instruction types
   struct {
@@ -89,9 +99,6 @@ typedef struct {
     x64_Operand* r1;
     x64_Operand* r2;
   };
-
-  // X64_ALLOC_STACK
-  int stack;
 } x64_Instruction;
 
 typedef struct {
@@ -107,6 +114,7 @@ typedef struct {
   String* name;
   bool global;
   StaticInit init;
+  int alignment;
 } x64_StaticVariable;
 
 typedef struct {

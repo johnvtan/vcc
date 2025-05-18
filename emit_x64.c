@@ -174,14 +174,14 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       emit1(cx, cstring(format_cc("set", inst->cc)), inst->r1);
       break;
     }
-    case X64_ALLOC_STACK: {
-      emit(cx, "\tsubq $%d, %%rsp\n", inst->stack);
-      break;
-    }
-    case X64_DEALLOC_STACK: {
-      emit(cx, "\taddq $%d, %%rsp\n", inst->stack);
-      break;
-    }
+    // case X64_ALLOC_STACK: {
+    //   emit(cx, "\tsubq $%d, %%rsp\n", inst->stack);
+    //   break;
+    // }
+    // case X64_DEALLOC_STACK: {
+    //   emit(cx, "\taddq $%d, %%rsp\n", inst->stack);
+    //   break;
+    // }
     case X64_LABEL: {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
