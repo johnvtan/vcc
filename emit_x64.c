@@ -34,19 +34,19 @@ static void emit(Context* cx, const char* fmt, ...) {
 static void emit_operand(Context* cx, const x64_Operand* op) {
   switch (op->ty) {
     case X64_OP_IMM: {
-      emit(cx, "$%d", op->imm);
+      emit(cx, "$%lld", op->imm);
       break;
     }
     case X64_OP_REG: {
       const char* reg_str = NULL;
-      if (op->size == 8) {
+      if (op->size == QUADWORD) {
         static const char* reg_map[] = {
             [REG_AX] = "rax", [REG_DX] = "rdx",  [REG_DI] = "rdi",
             [REG_CX] = "rcx", [REG_SI] = "rsi",  [REG_R8] = "r8",
             [REG_R9] = "r9",  [REG_R10] = "r10", [REG_R11] = "r11",
         };
         reg_str = reg_map[op->reg];
-      } else if (op->size == 4) {
+      } else if (op->size == LONGWORD) {
         static const char* reg_map[] = {
             [REG_AX] = "eax", [REG_DX] = "edx",   [REG_DI] = "edi",
             [REG_CX] = "ecx", [REG_SI] = "esi",   [REG_R8] = "r8d",

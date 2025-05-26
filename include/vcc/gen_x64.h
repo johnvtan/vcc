@@ -39,7 +39,7 @@ typedef enum {
 typedef struct {
   x64_OperandType ty;
   // X64_OP_IMM
-  int imm;
+  int64_t imm;
 
   // X64_OP_REG
   x64_RegType reg;

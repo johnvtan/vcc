@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <vcc/errors.h>
 #include <vcc/gen_x64.h>
@@ -7,6 +8,17 @@
 // This pass just has a global symbol table because I'm too lazy to rewrite
 // every function to take a contex struct like the other passes.
 static SymbolTable* gSymbolTable = NULL;
+
+static int size_to_bytes(x64_Size size) {
+  switch (size) {
+    case QUADWORD:
+      return 8;
+    case LONGWORD:
+      return 4;
+    default:
+      assert(false);
+  }
+}
 
 static x64_Size type_to_size(CType c_type) {
   switch (c_type) {
@@ -85,7 +97,7 @@ static x64_Operand ZERO = {
 //
 // x64_Operand helpers
 //
-static x64_Operand* imm(int val) {
+static x64_Operand* imm(int64_t val) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
@@ -278,17 +290,24 @@ static x64_Operand* fixup_pseudoreg(SymbolTable* st, Hashmap* stackmap,
   // If we find a pseudoreg not in |stackmap|, check the symbol table if it's a
   // static variable.
   SymbolTableEntry* st_entry = hashmap_get(st->map, operand->pseudo);
-  if (st_entry) {
-    assert(st_entry->ty != ST_FN);
+  assert(st_entry);
+  assert(st_entry->ty != ST_FN);
 
-    // Emit data operands for static variables.
-    if (st_entry->ty == ST_STATIC_VAR) {
-      return data(operand->pseudo);
-    }
-    // Allocate local variables on stack.
+  // Emit data operands for static variables.
+  if (st_entry->ty == ST_STATIC_VAR) {
+    return data(operand->pseudo);
   }
 
-  *stack_pos += 4;
+  // TODO: i guess pseudoregs don't have their size filled out.
+  const int bytes = size_to_bytes(type_to_size(st_entry->local.c_type));
+  *stack_pos += bytes;
+
+  // align stack pos by rounding up to next multiple of bytes
+  if (*stack_pos % bytes != 0) {
+    *stack_pos += bytes - (*stack_pos % bytes);
+  }
+
+  assert(*stack_pos % bytes == 0);
 
   // allocate a new stack operand if one doesn't exist
   stack_operand = stack(*stack_pos * -1);
@@ -323,13 +342,16 @@ static x64_Function* fixup_instructions(x64_Function* input) {
     input->stack_size += (16 - input->stack_size % 16);
   }
 
-  // push_instr(ret->instructions, alloc_stack(input->stack_size));
+  // allocate stack for function local variables.
+  push_instr(ret->instructions, instr2(X64_SUB, imm(input->stack_size),
+                                       reg(REG_SP, QUADWORD), QUADWORD));
   vec_for_each(input->instructions, x64_Instruction, instr) {
+    // TODO refactor
     if (requires_intermediate_register_mov(iter.instr)) {
       // split up stack->stack ops into
       // mov r1, %r10d
       // {op} %r10d, r2
-      x64_Operand* r10 = reg(REG_R10, 4);
+      x64_Operand* r10 = reg(REG_R10, iter.instr->size);
       push_instr(ret->instructions, mov(iter.instr->r1, r10, iter.instr->size));
       push_instr(ret->instructions,
                  instr2(iter.instr->ty, r10, iter.instr->r2, iter.instr->size));
@@ -337,23 +359,52 @@ static x64_Function* fixup_instructions(x64_Function* input) {
     } else if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
       // idiv isn't allowed with immediate args
       // instead, move the arg into a register then idiv on that
-      x64_Operand* r10 = reg(REG_R10, 4);
+      x64_Operand* r10 = reg(REG_R10, iter.instr->size);
       push_instr(ret->instructions, mov(iter.instr->r1, r10, iter.instr->size));
       push_instr(ret->instructions, instr1(X64_IDIV, r10, iter.instr->size));
     } else if (iter.instr->ty == X64_MUL &&
                op_is_stack_or_data(iter.instr->r2)) {
       // mul can't use a stack location as its r2
-      x64_Operand* r11 = reg(REG_R11, 4);
+      x64_Operand* r11 = reg(REG_R11, iter.instr->size);
       push_instr(ret->instructions, mov(iter.instr->r2, r11, iter.instr->size));
       push_instr(ret->instructions,
                  instr2(X64_MUL, iter.instr->r1, r11, iter.instr->size));
       push_instr(ret->instructions, mov(r11, iter.instr->r2, iter.instr->size));
     } else if (iter.instr->ty == X64_CMP && iter.instr->r2->ty == X64_OP_IMM) {
       // cmp can't have an imm as its r2
-      x64_Operand* r11 = reg(REG_R11, 4);
+      x64_Operand* r11 = reg(REG_R11, iter.instr->size);
       push_instr(ret->instructions, mov(iter.instr->r2, r11, iter.instr->size));
       push_instr(ret->instructions,
                  instr2(X64_CMP, iter.instr->r1, r11, iter.instr->size));
+    } else if (iter.instr->ty == X64_MOVSX &&
+               (iter.instr->r1->ty == X64_OP_IMM ||
+                op_is_stack_or_data(iter.instr->r2))) {
+      // movsx can't use imm as source or memory as dst
+      x64_Operand* src = iter.instr->r1;
+      if (iter.instr->r1->ty == X64_OP_IMM) {
+        x64_Operand* r10 = reg(REG_R10, iter.instr->r1->size);
+        push_instr(ret->instructions,
+                   mov(iter.instr->r1, r10, iter.instr->r1->size));
+        src = r10;
+      }
+
+      // For simplicity when fixing up movsx, we always movsx to r11 even if r2
+      // is a register.
+      x64_Operand* r11 = reg(REG_R11, iter.instr->r2->size);
+      push_instr(ret->instructions,
+                 instr2(X64_MOVSX, src, r11, iter.instr->r2->size));
+      push_instr(ret->instructions,
+                 mov(r11, iter.instr->r2, iter.instr->r2->size));
+    } else if ((iter.instr->ty == X64_ADD || iter.instr->ty == X64_MUL ||
+                iter.instr->ty == X64_SUB) &&
+               (iter.instr->r1->ty == X64_OP_IMM &&
+                iter.instr->r1->size == QUADWORD &&
+                iter.instr->r1->imm > INT_MAX)) {
+      x64_Operand* r10 = reg(REG_R10, iter.instr->r1->size);
+      push_instr(ret->instructions,
+                 mov(iter.instr->r1, r10, iter.instr->r1->size));
+      push_instr(ret->instructions, instr2(iter.instr->ty, r10, iter.instr->r2,
+                                           iter.instr->r2->size));
     } else {
       push_instr(ret->instructions, *iter.instr);
     }
@@ -402,14 +453,13 @@ static x64_Function* convert_function(IrFunction* ir_function) {
     }
     n++;
 
-    push_instr(ret->instructions,
-               mov(arg, pseudo(iter.param), symbol_to_size(iter.param)));
-
+    x64_Size param_size = symbol_to_size(iter.param);
+    push_instr(ret->instructions, mov(arg, pseudo(iter.param), param_size));
     // TODO: correct sizing.
     // Note: this size corresponds to the pseudoreg that the argument is moved
     // into, not the size of the argument passed on the stack (which is always 8
     // bytes currently).
-    ret->stack_size += 4;
+    ret->stack_size += size_to_bytes(param_size);
   }
 
   // Handle instructions in the function.
@@ -536,7 +586,8 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         // adjust stack if we have an odd number of arguments.
         // The x64 stack must be 16 byte aligned.
         if (ir->args->len > kNumArgumentRegs && (ir->args->len % 2)) {
-          // push_instr(ret->instructions, alloc_stack(8));
+          push_instr(ret->instructions,
+                     instr2(X64_SUB, imm(8), reg(REG_SP, QUADWORD), QUADWORD));
           stack_to_dealloc += 8;
         }
 
@@ -582,11 +633,9 @@ static x64_Function* convert_function(IrFunction* ir_function) {
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          // x64_Instruction dealloc_stack = {
-          //     .ty = X64_DEALLOC_STACK,
-          //     .stack = stack_to_dealloc,
-          // };
-          // push_instr(ret->instructions, dealloc_stack);
+          push_instr(ret->instructions,
+                     instr2(X64_ADD, imm(stack_to_dealloc),
+                            reg(REG_SP, QUADWORD), QUADWORD));
         }
 
         // Move the return value in RAX to the call's destination.
