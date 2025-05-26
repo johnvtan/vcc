@@ -44,6 +44,7 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
             [REG_AX] = "rax", [REG_DX] = "rdx",  [REG_DI] = "rdi",
             [REG_CX] = "rcx", [REG_SI] = "rsi",  [REG_R8] = "r8",
             [REG_R9] = "r9",  [REG_R10] = "r10", [REG_R11] = "r11",
+            [REG_SP] = "rsp",
         };
         reg_str = reg_map[op->reg];
       } else if (op->size == LONGWORD) {
@@ -51,6 +52,7 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
             [REG_AX] = "eax", [REG_DX] = "edx",   [REG_DI] = "edi",
             [REG_CX] = "ecx", [REG_SI] = "esi",   [REG_R8] = "r8d",
             [REG_R9] = "r9d", [REG_R10] = "r10d", [REG_R11] = "r11d",
+            [REG_SP] = "rsp",
         };
         reg_str = reg_map[op->reg];
       } else {
@@ -77,21 +79,26 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
 }
 
 static void emit2(Context* cx, const char* inst, const x64_Operand* src,
-                  const x64_Operand* dst) {
-  emit(cx, "\t%s ", inst);
+                  const x64_Operand* dst, const x64_Size size) {
+  emit(cx, "\t%s%c ", inst, size);
   emit_operand(cx, src);
   emit(cx, ", ");
   emit_operand(cx, dst);
   emit(cx, "\n");
 }
 
-static void emit1(Context* cx, const char* inst, const x64_Operand* arg) {
-  emit(cx, "\t%s ", inst);
+static void emit1(Context* cx, const char* inst, const x64_Operand* arg,
+                  const x64_Size size) {
+  emit(cx, "\t%s%c ", inst, size);
   emit_operand(cx, arg);
   emit(cx, "\n");
 }
 
-static void emit0(Context* cx, const char* inst) { emit(cx, "\t%s\n", inst); }
+static void emit_jump(Context* cx, const char* inst, const x64_Operand* arg) {
+  emit(cx, "\t%s ", inst);
+  emit_operand(cx, arg);
+  emit(cx, "\n");
+}
 
 static void emit_label(Context* cx, const String* label) {
   emit(cx, LOCAL_LABEL_PREFIX "%s:\n", cstring(label));
@@ -123,65 +130,61 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       // Function epilogue
       emit(cx, "\tmovq %%rbp, %%rsp\n");
       emit(cx, "\tpopq %%rbp\n");
-      emit0(cx, "ret");
+      emit(cx, "\tret\n");
       break;
     }
     case X64_MOV: {
-      emit2(cx, "movl", inst->r1, inst->r2);
+      emit2(cx, "mov", inst->r1, inst->r2, inst->size);
       break;
     }
     case X64_NEG: {
-      emit1(cx, "negl", inst->r1);
+      emit1(cx, "neg", inst->r1, inst->size);
       break;
     }
     case X64_NOT: {
-      emit1(cx, "notl", inst->r1);
+      emit1(cx, "not", inst->r1, inst->size);
       break;
     }
     case X64_ADD: {
-      emit2(cx, "addl", inst->r1, inst->r2);
+      emit2(cx, "add", inst->r1, inst->r2, inst->size);
       break;
     }
     case X64_SUB: {
-      emit2(cx, "subl", inst->r1, inst->r2);
+      emit2(cx, "sub", inst->r1, inst->r2, inst->size);
       break;
     }
     case X64_MUL: {
-      emit2(cx, "imull", inst->r1, inst->r2);
+      emit2(cx, "imul", inst->r1, inst->r2, inst->size);
       break;
     }
     case X64_CMP: {
-      emit2(cx, "cmpl", inst->r1, inst->r2);
+      emit2(cx, "cmp", inst->r1, inst->r2, inst->size);
       break;
     }
     case X64_IDIV: {
-      emit1(cx, "idivl", inst->r1);
+      emit1(cx, "idiv", inst->r1, inst->size);
       break;
     }
     case X64_CDQ: {
-      emit0(cx, "cdq");
+      if (inst->size == QUADWORD) {
+        emit(cx, "\tcqo\n");
+      } else {
+        emit(cx, "\tcdq\n");
+      }
       break;
     }
     case X64_JMP: {
-      emit1(cx, "jmp", inst->r1);
+      emit_jump(cx, "jmp", inst->r1);
       break;
     }
     case X64_JMPCC: {
-      emit1(cx, cstring(format_cc("j", inst->cc)), inst->r1);
+      emit_jump(cx, cstring(format_cc("j", inst->cc)), inst->r1);
       break;
     }
     case X64_SETCC: {
-      emit1(cx, cstring(format_cc("set", inst->cc)), inst->r1);
+      emit_jump(cx, cstring(format_cc("set", inst->cc)), inst->r1);
       break;
     }
-    // case X64_ALLOC_STACK: {
-    //   emit(cx, "\tsubq $%d, %%rsp\n", inst->stack);
-    //   break;
-    // }
-    // case X64_DEALLOC_STACK: {
-    //   emit(cx, "\taddq $%d, %%rsp\n", inst->stack);
-    //   break;
-    // }
     case X64_LABEL: {
       if (inst->r1->ty != X64_OP_LABEL) {
         panic("Expected label operand but got %u", inst->r1->ty);
@@ -197,9 +200,21 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       break;
     }
     case X64_PUSH: {
-      // push always uses 8 byte registers.
-      inst->r1->size = 8;
-      emit1(cx, "pushq", inst->r1);
+      // TODO(johntan): cleanup? Just hardcoding QUADWORD rn.
+      inst->r1->size = QUADWORD;
+      emit1(cx, "push", inst->r1, QUADWORD);
+      break;
+    }
+    case X64_MOVSX: {
+      assert(inst->r1->size);
+      assert(inst->r2->size);
+
+      // TODO(johntan): refactor
+      emit(cx, "\tmovslq ");
+      emit_operand(cx, inst->r1);
+      emit(cx, ", ");
+      emit_operand(cx, inst->r2);
+      emit(cx, "\n");
       break;
     }
     default:

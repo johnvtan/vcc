@@ -1,2 +1,6 @@
+- [ ] Fix static init
+- [ ] Fix immedaite values that don't fit in integer
+  - [ ] cmp
+  - [ ] mov
 - [ ] Cleanup backend passes. It might be cleaner to just fixup instructions and pseudoregs in a
   single pass along with x64 generation.

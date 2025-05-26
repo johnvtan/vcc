@@ -119,10 +119,11 @@ static x64_Operand* pseudo(String* name) {
   return ret;
 }
 
-static x64_Operand* stack(int val) {
+static x64_Operand* stack(int val, x64_Size size) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_STACK;
   ret->stack = val;
+  ret->size = size;
   return ret;
 }
 
@@ -134,10 +135,11 @@ static x64_Operand* label_op(String* label) {
   return ret;
 }
 
-static x64_Operand* data(String* ident) {
+static x64_Operand* data(String* ident, x64_Size size) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_DATA;
   ret->ident = ident;
+  ret->size = size;
   return ret;
 }
 
@@ -267,7 +269,7 @@ static void idiv(IrInstruction* ir, Vec* out) {
   x64_Operand* r1 = to_x64_op(ir->r1);
   x64_Operand* r2 = to_x64_op(ir->r2);
 
-  push_instr(out, mov(r1, reg(REG_AX, 4), size));
+  push_instr(out, mov(r1, reg(REG_AX, size), size));
   push_instr(out, instr0(X64_CDQ, size));
   push_instr(out, instr1(X64_IDIV, r2, size));
 }
@@ -295,11 +297,13 @@ static x64_Operand* fixup_pseudoreg(SymbolTable* st, Hashmap* stackmap,
 
   // Emit data operands for static variables.
   if (st_entry->ty == ST_STATIC_VAR) {
-    return data(operand->pseudo);
+    x64_Size size = type_to_size(st_entry->static_.c_type);
+    return data(operand->pseudo, size);
   }
 
   // TODO: i guess pseudoregs don't have their size filled out.
-  const int bytes = size_to_bytes(type_to_size(st_entry->local.c_type));
+  x64_Size size = type_to_size(st_entry->local.c_type);
+  const int bytes = size_to_bytes(size);
   *stack_pos += bytes;
 
   // align stack pos by rounding up to next multiple of bytes
@@ -310,7 +314,7 @@ static x64_Operand* fixup_pseudoreg(SymbolTable* st, Hashmap* stackmap,
   assert(*stack_pos % bytes == 0);
 
   // allocate a new stack operand if one doesn't exist
-  stack_operand = stack(*stack_pos * -1);
+  stack_operand = stack(*stack_pos * -1, size);
   hashmap_put(stackmap, operand->pseudo, stack_operand);
   return stack_operand;
 }
@@ -387,10 +391,13 @@ static x64_Function* fixup_instructions(x64_Function* input) {
                    mov(iter.instr->r1, r10, iter.instr->r1->size));
         src = r10;
       }
+      assert(src->size);
 
       // For simplicity when fixing up movsx, we always movsx to r11 even if r2
       // is a register.
       x64_Operand* r11 = reg(REG_R11, iter.instr->r2->size);
+      assert(r11->size);
+
       push_instr(ret->instructions,
                  instr2(X64_MOVSX, src, r11, iter.instr->r2->size));
       push_instr(ret->instructions,
@@ -443,17 +450,18 @@ static x64_Function* convert_function(IrFunction* ir_function) {
 
   size_t n = 0;
   vec_for_each(ir_function->params, String, param) {
+    x64_Size param_size = symbol_to_size(iter.param);
+
     x64_Operand* arg = NULL;
     if (n < kNumArgumentRegs) {
-      arg = reg(kArgumentRegs[n], 4);
+      arg = reg(kArgumentRegs[n], param_size);
     } else {
       // arguments are always passed as 8 bytes on the stack.
       int stack_offset = (8 * (n - kNumArgumentRegs)) + 16;
-      arg = stack(stack_offset);
+      arg = stack(stack_offset, param_size);
     }
     n++;
 
-    x64_Size param_size = symbol_to_size(iter.param);
     push_instr(ret->instructions, mov(arg, pseudo(iter.param), param_size));
     // TODO: correct sizing.
     // Note: this size corresponds to the pseudoreg that the argument is moved
@@ -468,8 +476,9 @@ static x64_Function* convert_function(IrFunction* ir_function) {
     switch (ir->ty) {
       case IR_RET: {
         // mov $val, %rax
-        push_instr(ret->instructions, mov(to_x64_op(ir->r1), reg(REG_AX, 4),
-                                          ir_val_to_size(ir->r1)));
+        x64_Size size = ir_val_to_size(ir->r1);
+        push_instr(ret->instructions,
+                   mov(to_x64_op(ir->r1), reg(REG_AX, size), size));
 
         // size for RET should be ignored.
         push_instr(ret->instructions, instr0(X64_RET, QUADWORD));
@@ -530,16 +539,16 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         // do Idiv and return ax
         idiv(ir, ret->instructions);
         x64_Operand* dst = to_x64_op(ir->dst);
-        push_instr(ret->instructions,
-                   mov(reg(REG_AX, 4), dst, asm_size_of(ir)));
+        x64_Size size = asm_size_of(ir);
+        push_instr(ret->instructions, mov(reg(REG_AX, size), dst, size));
         break;
       }
       case IR_REM: {
         // do Idiv and return dx
         idiv(ir, ret->instructions);
         x64_Operand* dst = to_x64_op(ir->dst);
-        push_instr(ret->instructions,
-                   mov(reg(REG_DX, 4), dst, asm_size_of(ir)));
+        x64_Size size = asm_size_of(ir);
+        push_instr(ret->instructions, mov(reg(REG_DX, size), dst, size));
         break;
       }
       case IR_JMP: {
@@ -570,6 +579,12 @@ static x64_Function* convert_function(IrFunction* ir_function) {
       case IR_SIGN_EXTEND: {
         assert(ir_val_to_size(ir->r1) == LONGWORD);
         assert(ir_val_to_size(ir->dst) == QUADWORD);
+
+        x64_Instruction i =
+            instr2(X64_MOVSX, to_x64_op(ir->r1), to_x64_op(ir->dst), QUADWORD);
+        assert(i.r1->size);
+        assert(i.r2->size);
+
         push_instr(ret->instructions, instr2(X64_MOVSX, to_x64_op(ir->r1),
                                              to_x64_op(ir->dst), QUADWORD));
         break;
@@ -597,7 +612,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
           IrVal* val = vec_get(ir->args, i);
           x64_Size size = ir_val_to_size(val);
           x64_Operand* arg = to_x64_op(val);
-          x64_Operand* x64_reg = reg(kArgumentRegs[i], 4);
+          x64_Operand* x64_reg = reg(kArgumentRegs[i], size);
           push_instr(ret->instructions, mov(arg, x64_reg, size));
         }
 
@@ -641,7 +656,7 @@ static x64_Function* convert_function(IrFunction* ir_function) {
         // Move the return value in RAX to the call's destination.
         x64_Size size = ir_val_to_size(ir->dst);
         x64_Operand* dst = to_x64_op(ir->dst);
-        push_instr(ret->instructions, mov(reg(REG_AX, 4), dst, size));
+        push_instr(ret->instructions, mov(reg(REG_AX, size), dst, size));
         break;
       }
       default:
