@@ -343,7 +343,6 @@ static bool imm_too_large(x64_Instruction* instr) {
         return false;
       }
     case X64_ADD:
-    case X64_CMP:
     case X64_SUB:
     case X64_PUSH:
       if (instr->r1->ty == X64_OP_IMM && instr->r1->imm > INT_MAX) {
@@ -410,13 +409,31 @@ static x64_Function* fixup_instructions(x64_Function* input) {
                    instr2(X64_MUL, src, r11, iter.instr->size));
         push_instr(ret->instructions,
                    mov(r11, iter.instr->r2, iter.instr->size));
+      } else {
+        push_instr(ret->instructions,
+                   instr2(X64_MUL, src, iter.instr->r2, iter.instr->size));
       }
-    } else if (iter.instr->ty == X64_CMP && iter.instr->r2->ty == X64_OP_IMM) {
-      // cmp can't have an imm as its r2
-      x64_Operand* r11 = reg(REG_R11, iter.instr->size);
-      push_instr(ret->instructions, mov(iter.instr->r2, r11, iter.instr->size));
-      push_instr(ret->instructions,
-                 instr2(X64_CMP, iter.instr->r1, r11, iter.instr->size));
+    } else if (iter.instr->ty == X64_CMP) {
+      x64_Operand* src = iter.instr->r1;
+
+      if (iter.instr->r1->ty == X64_OP_IMM && iter.instr->r1->imm > INT_MAX) {
+        x64_Operand* r10 = reg(REG_R10, iter.instr->size);
+        push_instr(ret->instructions,
+                   mov(iter.instr->r1, r10, iter.instr->size));
+        src = r10;
+      }
+
+      if (iter.instr->r2->ty == X64_OP_IMM) {
+        // cmp can't have an imm as its r2
+        x64_Operand* r11 = reg(REG_R11, iter.instr->size);
+        push_instr(ret->instructions,
+                   mov(iter.instr->r2, r11, iter.instr->size));
+        push_instr(ret->instructions,
+                   instr2(X64_CMP, src, r11, iter.instr->size));
+      } else {
+        push_instr(ret->instructions,
+                   instr2(X64_CMP, src, iter.instr->r2, iter.instr->size));
+      }
     } else if (iter.instr->ty == X64_MOVSX &&
                (iter.instr->r1->ty == X64_OP_IMM ||
                 op_is_stack_or_data(iter.instr->r2))) {
