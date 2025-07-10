@@ -147,16 +147,7 @@ static x64_Operand* to_x64_op(IrVal* ir) {
   x64_Operand* ret = NULL;
   switch (ir->ty) {
     case IR_VAL_CONST:
-      switch (ir->constant.c_type) {
-        case TYPE_INT:
-          ret = imm(ir->constant.int_);
-          break;
-        case TYPE_LONG:
-          ret = imm(ir->constant.long_);
-          break;
-        default:
-          panic("Unexpected const c type %lu", ir->constant.c_type);
-      }
+      ret = imm(ir->constant.storage_);
       break;
     case IR_VAL_VAR:
       ret = pseudo(ir->var);
@@ -671,6 +662,16 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
   ret->name = ir->name;
   ret->global = ir->global;
   ret->init = ir->init;
+  switch (ret->init.c_type) {
+    case TYPE_INT:
+      ret->alignment = 4;
+      break;
+    case TYPE_LONG:
+      ret->alignment = 8;
+      break;
+    default:
+      assert(false);
+  }
   assert(ret->init.ty != INIT_TENTATIVE);
   return ret;
 }

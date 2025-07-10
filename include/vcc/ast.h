@@ -21,11 +21,7 @@ typedef enum CType {
 // Container for a compile time constant.
 typedef struct {
   CType c_type;
-  union {
-    // TODO: just use a single 64 bit integer?
-    int int_;
-    long long_;
-  };
+  uint64_t storage_;
 } CompTimeConst;
 
 //

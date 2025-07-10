@@ -51,13 +51,7 @@ static CompTimeConst convert_comptime_const_to(CompTimeConst c,
     return c;
   }
 
-  CompTimeConst ret = {.c_type = target_type};
-
-  if (target_type == TYPE_INT) {
-    ret.int_ = (int)c.long_;
-  } else {
-    ret.long_ = (long)c.int_;
-  }
+  CompTimeConst ret = {.c_type = target_type, .storage_ = c.storage_};
   return ret;
 }
 
@@ -65,15 +59,7 @@ static StaticInit convert_static_init_to(StaticInit init, CType target_type) {
   if (init.c_type == target_type) {
     return init;
   }
-
-  StaticInit ret = {.c_type = target_type};
-
-  if (target_type == TYPE_INT) {
-    ret.int_ = (int)init.long_;
-  } else {
-    ret.long_ = (long)init.int_;
-  }
-  return ret;
+  return (StaticInit){.c_type = target_type, .storage_ = init.storage_};
 }
 
 static StaticInit to_static_init(AstExpr* e) {
@@ -81,18 +67,8 @@ static StaticInit to_static_init(AstExpr* e) {
   StaticInit ret = {
       .ty = INIT_HAS_VALUE,
       .c_type = e->c_type,
+      .storage_ = e->const_.storage_,
   };
-
-  switch (e->c_type) {
-    case TYPE_INT:
-      ret.int_ = e->const_.int_;
-      break;
-    case TYPE_LONG:
-      ret.int_ = e->const_.long_;
-      break;
-    default:
-      assert(false);
-  }
   return ret;
 }
 
@@ -246,7 +222,7 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
                                               .init = {
                                                   .ty = INIT_HAS_VALUE,
                                                   .c_type = TYPE_INT,
-                                                  .int_ = 0,
+                                                  .storage_ = 0,
                                               }}};
 
     if (decl->var.init) {
@@ -449,9 +425,9 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
 static String* comptime_const_to_string(CompTimeConst c) {
   switch (c.c_type) {
     case TYPE_INT:
-      return string_format("%d", c.int_);
+      return string_format("%d", c.storage_);
     case TYPE_LONG:
-      return string_format("%ldL", c.long_);
+      return string_format("%ldL", c.storage_);
     default:
       assert(false);
   }

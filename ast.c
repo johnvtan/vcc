@@ -343,15 +343,14 @@ static AstExpr* parse_primary(ParseContext* cx) {
       constant->c_type = TYPE_INT;
       constant->const_ = (CompTimeConst){
           .c_type = TYPE_INT,
-          .int_ = parsed,
       };
     } else {
       constant->c_type = TYPE_LONG;
       constant->const_ = (CompTimeConst){
           .c_type = TYPE_LONG,
-          .long_ = parsed,
       };
     }
+    constant->const_.storage_ = parsed;
     return constant;
   }
 

@@ -15,10 +15,7 @@ typedef struct {
   // only for INIT_HAS_VALUE
   struct {
     CType c_type;
-    union {
-      int int_;
-      long long_;
-    };
+    uint64_t storage_;
   };
 } StaticInit;
 

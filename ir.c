@@ -127,32 +127,14 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr);
 static CompTimeConst one(CType c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  switch (c_type) {
-    case TYPE_INT:
-      ret.int_ = 1;
-      break;
-    case TYPE_LONG:
-      ret.long_ = 1;
-      break;
-    default:
-      assert(false);
-  }
+  ret.storage_ = 1;
   return ret;
 }
 
 CompTimeConst zero(CType c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  switch (c_type) {
-    case TYPE_INT:
-      ret.int_ = 0;
-      break;
-    case TYPE_LONG:
-      ret.long_ = 0;
-      break;
-    default:
-      assert(false);
-  }
+  ret.storage_ = 0;
   return ret;
 }
 
