@@ -162,6 +162,13 @@ static x64_Operand* to_x64_op(IrVal* ir) {
 
 //
 // x64 instruction helpers
+// TODO(johntan): If I want to remove the other passes, I might need to change
+// the API of all the instruction generation functions. It might be better to
+// have all of them take the |out| instruction vector directly, so that these
+// functions can insert e.g. additional moves or whatever.
+//
+// Or instead, just make the |out| instruction vector a global that these
+// functions push to directly.
 //
 static inline x64_Instruction instr2(x64_InstructionType ty, x64_Operand* r1,
                                      x64_Operand* r2, x64_Size size) {
@@ -314,15 +321,42 @@ static inline bool op_is_stack_or_data(x64_Operand* op) {
   return op->ty == X64_OP_STACK || op->ty == X64_OP_DATA;
 }
 
-static inline bool requires_intermediate_register_mov(x64_Instruction* instr) {
-  bool is_affected_instr = instr->ty == X64_MOV || instr->ty == X64_ADD ||
-                           instr->ty == X64_SUB || instr->ty == X64_CMP;
-  if (!is_affected_instr) {
-    return false;
+static bool is_mem_to_mem(x64_Instruction* instr) {
+  switch (instr->ty) {
+    case X64_MOV:
+    case X64_ADD:
+    case X64_SUB:
+    case X64_CMP:
+      break;
+    default:
+      return false;
   }
 
   assert(instr->r1 && instr->r2);
   return op_is_stack_or_data(instr->r1) && op_is_stack_or_data(instr->r2);
+}
+
+static bool imm_too_large(x64_Instruction* instr) {
+  switch (instr->ty) {
+    case X64_MOV:
+      if (!op_is_stack_or_data(instr->r2)) {
+        return false;
+      }
+    case X64_ADD:
+    case X64_MUL:
+    case X64_SUB:
+    case X64_CMP:
+    case X64_PUSH:
+      if (instr->r1->ty == X64_OP_IMM && instr->r1->imm > INT_MAX) {
+        return true;
+      }
+    default:
+      return false;
+  }
+}
+
+static bool requires_intermediate_register_mov(x64_Instruction* instr) {
+  return is_mem_to_mem(instr) || imm_too_large(instr);
 }
 
 //
