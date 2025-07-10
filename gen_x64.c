@@ -343,9 +343,8 @@ static bool imm_too_large(x64_Instruction* instr) {
         return false;
       }
     case X64_ADD:
-    case X64_MUL:
-    case X64_SUB:
     case X64_CMP:
+    case X64_SUB:
     case X64_PUSH:
       if (instr->r1->ty == X64_OP_IMM && instr->r1->imm > INT_MAX) {
         return true;
@@ -357,6 +356,14 @@ static bool imm_too_large(x64_Instruction* instr) {
 
 static bool requires_intermediate_register_mov(x64_Instruction* instr) {
   return is_mem_to_mem(instr) || imm_too_large(instr);
+}
+
+static void insert_intermediate_move(Vec* out, x64_Instruction* instr) {
+  // mov r1, %r10d
+  // {op} %r10d, r2
+  x64_Operand* r10 = reg(REG_R10, instr->size);
+  push_instr(out, mov(instr->r1, r10, instr->size));
+  push_instr(out, instr2(instr->ty, r10, instr->r2, instr->size));
 }
 
 //
@@ -377,13 +384,7 @@ static x64_Function* fixup_instructions(x64_Function* input) {
   vec_for_each(input->instructions, x64_Instruction, instr) {
     // TODO refactor
     if (requires_intermediate_register_mov(iter.instr)) {
-      // split up stack->stack ops into
-      // mov r1, %r10d
-      // {op} %r10d, r2
-      x64_Operand* r10 = reg(REG_R10, iter.instr->size);
-      push_instr(ret->instructions, mov(iter.instr->r1, r10, iter.instr->size));
-      push_instr(ret->instructions,
-                 instr2(iter.instr->ty, r10, iter.instr->r2, iter.instr->size));
+      insert_intermediate_move(ret->instructions, iter.instr);
       continue;
     } else if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
       // idiv isn't allowed with immediate args
@@ -391,14 +392,25 @@ static x64_Function* fixup_instructions(x64_Function* input) {
       x64_Operand* r10 = reg(REG_R10, iter.instr->size);
       push_instr(ret->instructions, mov(iter.instr->r1, r10, iter.instr->size));
       push_instr(ret->instructions, instr1(X64_IDIV, r10, iter.instr->size));
-    } else if (iter.instr->ty == X64_MUL &&
-               op_is_stack_or_data(iter.instr->r2)) {
-      // mul can't use a stack location as its r2
-      x64_Operand* r11 = reg(REG_R11, iter.instr->size);
-      push_instr(ret->instructions, mov(iter.instr->r2, r11, iter.instr->size));
-      push_instr(ret->instructions,
-                 instr2(X64_MUL, iter.instr->r1, r11, iter.instr->size));
-      push_instr(ret->instructions, mov(r11, iter.instr->r2, iter.instr->size));
+    } else if (iter.instr->ty == X64_MUL) {
+      x64_Operand* src = iter.instr->r1;
+      if (iter.instr->r1->ty == X64_OP_IMM && iter.instr->r1->imm > INT_MAX) {
+        x64_Operand* r10 = reg(REG_R10, iter.instr->size);
+        push_instr(ret->instructions,
+                   mov(iter.instr->r1, r10, iter.instr->size));
+        src = r10;
+      }
+
+      if (op_is_stack_or_data(iter.instr->r2)) {
+        // mul can't use a stack location as its r2
+        x64_Operand* r11 = reg(REG_R11, iter.instr->size);
+        push_instr(ret->instructions,
+                   mov(iter.instr->r2, r11, iter.instr->size));
+        push_instr(ret->instructions,
+                   instr2(X64_MUL, src, r11, iter.instr->size));
+        push_instr(ret->instructions,
+                   mov(r11, iter.instr->r2, iter.instr->size));
+      }
     } else if (iter.instr->ty == X64_CMP && iter.instr->r2->ty == X64_OP_IMM) {
       // cmp can't have an imm as its r2
       x64_Operand* r11 = reg(REG_R11, iter.instr->size);
@@ -427,16 +439,6 @@ static x64_Function* fixup_instructions(x64_Function* input) {
                  instr2(X64_MOVSX, src, r11, iter.instr->r2->size));
       push_instr(ret->instructions,
                  mov(r11, iter.instr->r2, iter.instr->r2->size));
-    } else if ((iter.instr->ty == X64_ADD || iter.instr->ty == X64_MUL ||
-                iter.instr->ty == X64_SUB) &&
-               (iter.instr->r1->ty == X64_OP_IMM &&
-                iter.instr->r1->size == QUADWORD &&
-                iter.instr->r1->imm > INT_MAX)) {
-      x64_Operand* r10 = reg(REG_R10, iter.instr->r1->size);
-      push_instr(ret->instructions,
-                 mov(iter.instr->r1, r10, iter.instr->r1->size));
-      push_instr(ret->instructions, instr2(iter.instr->ty, r10, iter.instr->r2,
-                                           iter.instr->r2->size));
     } else {
       push_instr(ret->instructions, *iter.instr);
     }
