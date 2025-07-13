@@ -255,7 +255,7 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
       emit(cx, "\t.long %d\n", (int)sv->init.storage_);
       break;
     case TYPE_LONG:
-      emit(cx, "\t.quad %d\n", (int)sv->init.storage_);
+      emit(cx, "\t.quad %ld\n", (long)sv->init.storage_);
       break;
     default:
       assert(false);

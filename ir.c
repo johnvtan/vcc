@@ -237,41 +237,84 @@ static IrVal* gen_binary(Context* cx, AstExpr* expr) {
   return dst;
 }
 
-static inline bool is_assign(int bin_op) { return bin_op >= BINARY_ASSIGN; }
+static IrVal* ir_cast(Context* cx, IrVal* val, CType from, CType to) {
+  if (from == to) {
+    return val;
+  }
 
+  IrVal* dst = temp(cx, to);
+  if (to == TYPE_LONG) {
+    push_inst(cx->out, unary(IR_SIGN_EXTEND, val, dst));
+  } else {
+    push_inst(cx->out, unary(IR_TRUNCATE, val, dst));
+  }
+
+  return dst;
+}
+
+static inline bool is_assign(int bin_op) { return bin_op >= BINARY_ASSIGN; }
 static IrVal* gen_assign(Context* cx, AstExpr* expr) {
   if (expr->binary.lhs->ty != EXPR_VAR) {
     panic("Expected var LHS but got %u", expr->binary.lhs->ty);
   }
 
-  // lhs is ultimately where the result of the expression goes
-  IrVal* lhs = gen_expr(cx, expr->binary.lhs);
+  if (expr->binary.op == BINARY_ASSIGN) {
+    // Handle simple assignment.
+    IrVal* lhs = gen_expr(cx, expr->binary.lhs);
+    IrVal* rhs = gen_expr(cx, expr->binary.rhs);
+    push_inst(cx->out, copy(rhs, lhs));
+    return lhs;
+  }
 
-  // rhs is on the right hand of the assign
-  IrVal* rhs = gen_expr(cx, expr->binary.rhs);
+  // Compound assignment is a little more complicated.
+  // If there's a cast in the rhs of a compound assign, we need to
+  // do the binary operation into a temp of the common type before
+  // moving the result into the lhs (with a cast or sign extend).
 
-  // Handle op, which stores the result in lhs
+  IrType ir_ty;
   switch (expr->binary.op) {
-    case BINARY_ASSIGN:
-      push_inst(cx->out, copy(rhs, lhs));
-      break;
     case BINARY_ADD_ASSIGN:
-      push_inst(cx->out, binary(IR_ADD, lhs, rhs, lhs));
+      ir_ty = IR_ADD;
       break;
     case BINARY_SUB_ASSIGN:
-      push_inst(cx->out, binary(IR_SUB, lhs, rhs, lhs));
+      ir_ty = IR_SUB;
       break;
     case BINARY_MUL_ASSIGN:
-      push_inst(cx->out, binary(IR_MUL, lhs, rhs, lhs));
+      ir_ty = IR_MUL;
       break;
     case BINARY_DIV_ASSIGN:
-      push_inst(cx->out, binary(IR_DIV, lhs, rhs, lhs));
+      ir_ty = IR_DIV;
       break;
     case BINARY_REM_ASSIGN:
-      push_inst(cx->out, binary(IR_REM, lhs, rhs, lhs));
+      ir_ty = IR_REM;
       break;
     default:
       panic("Unexpected bin op %u in assign", expr->binary.op);
+  }
+
+  // lhs is ultimately where the result of the expression goes
+  IrVal* lhs = gen_expr(cx, expr->binary.lhs);
+  IrVal* rhs = gen_expr(cx, expr->binary.rhs);
+
+  CType lhs_type = expr->binary.lhs->c_type;
+  CType rhs_type = expr->binary.rhs->c_type;
+
+  if (lhs_type != rhs_type) {
+    CType common_type = get_common_type(lhs_type, rhs_type);
+
+    IrVal* intermediate_dst = temp(cx, common_type);
+    IrVal* intermediate_lhs = ir_cast(cx, lhs, lhs_type, common_type);
+    IrVal* intermediate_rhs = ir_cast(cx, rhs, rhs_type, common_type);
+    push_inst(cx->out, binary(ir_ty, intermediate_lhs, intermediate_rhs,
+                              intermediate_dst));
+
+    // Convert intermediate_dst back to lhs's original type.
+    // Note: I think we could cast directly into lhs here.
+    IrVal* intermediate_dst_casted =
+        ir_cast(cx, intermediate_dst, common_type, lhs_type);
+    push_inst(cx->out, copy(intermediate_dst_casted, lhs));
+  } else {
+    push_inst(cx->out, binary(ir_ty, lhs, rhs, lhs));
   }
 
   return lhs;
@@ -433,18 +476,8 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
     }
     case EXPR_CAST: {
       IrVal* inner = gen_expr(cx, expr->cast.expr);
-      if (expr->cast.target_type == expr->cast.expr->c_type) {
-        return inner;
-      }
-
-      assert(expr->c_type == expr->cast.target_type);
-      IrVal* dst = temp(cx, expr->cast.target_type);
-      if (expr->cast.target_type == TYPE_LONG) {
-        push_inst(cx->out, unary(IR_SIGN_EXTEND, inner, dst));
-      } else {
-        push_inst(cx->out, unary(IR_TRUNCATE, inner, dst));
-      }
-      return dst;
+      return ir_cast(cx, inner, expr->cast.expr->c_type,
+                     expr->cast.target_type);
     }
     default:
       panic("Unexpected AstExpr type: %lu", expr->ty);

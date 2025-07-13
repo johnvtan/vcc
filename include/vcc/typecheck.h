@@ -73,5 +73,6 @@ typedef struct {
 } SymbolTable;
 
 SymbolTable* typecheck_ast(AstProgram* prog);
+CType get_common_type(CType t1, CType t2);
 
 #endif  // VCC_TYPECHECK_H

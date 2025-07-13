@@ -18,7 +18,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr);
 //
 // Type conversion helpers.
 //
-static CType get_common_type(CType t1, CType t2) {
+CType get_common_type(CType t1, CType t2) {
   if (t1 == t2) {
     return t1;
   }
@@ -325,8 +325,14 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       // For assigns, implicitly convert rhs to lhs type.
       if (is_assign(expr)) {
         check_lvalue(expr->binary.lhs);
-        expr->binary.rhs =
-            convert_to(expr->binary.rhs, expr->binary.lhs->c_type);
+
+        // Only convert for simple assigns. Compound assigns will have their
+        // types fixed in ir.c.
+        if (expr->binary.op == BINARY_ASSIGN) {
+          expr->binary.rhs =
+              convert_to(expr->binary.rhs, expr->binary.lhs->c_type);
+        }
+
         expr->c_type = expr->binary.lhs->c_type;
         return;
       }
