@@ -97,15 +97,17 @@ static x64_Size asm_size_of(Context* cx, IrInstruction* ir) {
 static x64_Operand ZERO = {
     .ty = X64_OP_IMM,
     .imm = 0,
+    .size = QUADWORD,  // TODO maybe this is okay for zero, not sure
 };
 
 //
 // x64_Operand helpers
 //
-static x64_Operand* imm(int64_t val) {
+static x64_Operand* imm(int64_t val, x64_Size size) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
+  ret->size = size;
   return ret;
 }
 
@@ -183,7 +185,7 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
   x64_Operand* ret = NULL;
   switch (ir->ty) {
     case IR_VAL_CONST:
-      ret = imm(ir->constant.storage_);
+      ret = imm(ir->constant.storage_, ir_val_to_size(cx, ir));
       break;
     case IR_VAL_VAR:
       ret = pseudo(cx, ir->var);
@@ -194,6 +196,10 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
 
   ret->size = ir_val_to_size(cx, ir);
   return ret;
+}
+
+static inline bool op_is_stack_or_data(x64_Operand* op) {
+  return op->ty == X64_OP_STACK || op->ty == X64_OP_DATA;
 }
 
 //
@@ -246,7 +252,31 @@ static inline void jmpcc(Context* cx, x64_ConditionCode cc, String* label) {
 
 static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
                        x64_Size size) {
-  instr2(cx, X64_MOV, r1, r2, size);
+  // Memory to memory moves require an intermediate move to a register.
+  bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
+
+  // Can only move 32 bit immediates directly into memory.
+  bool imm_too_large =
+      op_is_stack_or_data(r2) && r1->ty == X64_OP_IMM && r1->imm > INT_MAX;
+  if (is_mem_to_mem || imm_too_large) {
+    // insert intermediate move to r10
+    x64_Operand* r10 = reg(REG_R10, size);
+    instr2(cx, X64_MOV, r1, r10, size);
+    instr2(cx, X64_MOV, r10, r2, size);
+  } else {
+    instr2(cx, X64_MOV, r1, r2, size);
+  }
+}
+
+static inline void push(Context* cx, x64_Operand* arg, x64_Size size) {
+  if (arg->ty == X64_OP_IMM && arg->imm > INT_MAX) {
+    // insert intermediate move to r10
+    x64_Operand* r10 = reg(REG_R10, size);
+    instr2(cx, X64_MOV, arg, r10, size);
+    instr1(cx, X64_PUSH, r10, size);
+  } else {
+    instr1(cx, X64_PUSH, arg, size);
+  }
 }
 
 static inline x64_Function* function(String* name) {
@@ -266,23 +296,95 @@ static void unary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
   return;
 }
 
+static bool imm_bigger_than_int(x64_Operand* op) {
+  return op->ty == X64_OP_IMM && op->imm > INT_MAX;
+}
+
 static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
   x64_Size size = asm_size_of(cx, ir);
 
-  x64_Operand* r1 = to_x64_op(cx, ir->r1);
-  x64_Operand* r2 = to_x64_op(cx, ir->r2);
-  x64_Operand* dst = to_x64_op(cx, ir->dst);
+  x64_Operand* r1;
+  x64_Operand* r2;
 
-  // mov r1, dst
-  mov(cx, r1, dst, size);
+  // A bit confusing, but all binary operations first move r1 into dst then do
+  // the binary operation on r2, dst. Because r2 becomes the binary op's r1, and
+  // dst becomes the binary op's r2, we rename them here.
+  {
+    x64_Operand* ir_r1 = to_x64_op(cx, ir->r1);
+    x64_Operand* ir_r2 = to_x64_op(cx, ir->r2);
+    x64_Operand* ir_dst = to_x64_op(cx, ir->dst);
 
-  // {op} r2, dst
-  instr2(cx, ty, r2, dst, size);
+    // mov r1, dst
+    mov(cx, ir_r1, ir_dst, size);
+    r1 = ir_r2;
+    r2 = ir_dst;
+  }
+
+  switch (ty) {
+    case X64_ADD:
+    case X64_SUB: {
+      bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
+      if (is_mem_to_mem || imm_bigger_than_int(r1)) {
+        x64_Operand* r10 = reg(REG_R10, size);
+        instr2(cx, X64_MOV, r1, r10, size);
+        instr2(cx, ty, r10, r2, size);
+      } else {
+        instr2(cx, ty, r1, r2, size);
+      }
+      return;
+    }
+    case X64_MUL: {
+      if (imm_bigger_than_int(r1)) {
+        x64_Operand* r10 = reg(REG_R10, size);
+        instr2(cx, X64_MOV, r1, r10, size);
+        r1 = r10;
+      }
+
+      if (op_is_stack_or_data(r2)) {
+        // mul can't use a stack location as its r2
+        x64_Operand* r11 = reg(REG_R11, size);
+        instr2(cx, X64_MOV, r2, r11, size);
+        instr2(cx, X64_MUL, r1, r11, size);
+        instr2(cx, X64_MOV, r11, r2, size);
+      } else {
+        instr2(cx, X64_MUL, r1, r2, size);
+      }
+      return;
+    }
+    default:
+      instr2(cx, ty, r1, r2, size);
+      return;
+  }
+
   return;
 }
 
-static void comparison(Context* cx, x64_ConditionCode cc, IrInstruction* ir) {
-  // comparisons are different because their dst type is always an int
+static void cmp(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size size) {
+  const bool requires_move_to_r10 =
+      (op_is_stack_or_data(r1) && op_is_stack_or_data(r2)) ||
+      imm_bigger_than_int(r1);
+  if (requires_move_to_r10) {
+    // insert intermediate move from r2 to r10
+    x64_Operand* r10 = reg(REG_R10, size);
+    instr2(cx, X64_MOV, r1, r10, size);
+    r1 = r10;
+  }
+
+  if (r2->ty == X64_OP_IMM) {
+    // cmp can't have an imm as its r2, move r2 to r11 and use r11 as the
+    // argument.
+    x64_Operand* r11 = reg(REG_R11, size);
+    mov(cx, r2, r11, size);
+    r2 = r11;
+  }
+
+  // cmp r2, r1
+  instr2(cx, X64_CMP, r1, r2, size);
+}
+
+static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
+                          IrInstruction* ir) {
+  // cmps are different because their dst type is always an int
   x64_Size r1_size = ir_val_to_size(cx, ir->r1);
   assert(ir_val_to_size(cx, ir->r2) == r1_size);
   x64_Size dst_size = ir_val_to_size(cx, ir->dst);
@@ -291,10 +393,10 @@ static void comparison(Context* cx, x64_ConditionCode cc, IrInstruction* ir) {
   x64_Operand* r2 = to_x64_op(cx, ir->r2);
   x64_Operand* dst = to_x64_op(cx, ir->dst);
 
-  // cmp r2, r1
-  instr2(cx, X64_CMP, r2, r1, r1_size);
+  cmp(cx, r2, r1, r1_size);
+
   // mov 0, dst
-  mov(cx, imm(0), dst, dst_size);
+  mov(cx, imm(0, dst_size), dst, dst_size);
   // setcc(cc, dst)
   setcc(cx, cc, dst);
 }
@@ -306,147 +408,48 @@ static void idiv(Context* cx, IrInstruction* ir) {
 
   mov(cx, r1, reg(REG_AX, size), size);
   instr0(cx, X64_CDQ, size);
-  instr1(cx, X64_IDIV, r2, size);
-}
 
-static inline bool op_is_stack_or_data(x64_Operand* op) {
-  return op->ty == X64_OP_STACK || op->ty == X64_OP_DATA;
-}
-
-static bool is_mem_to_mem(x64_Instruction* instr) {
-  switch (instr->ty) {
-    case X64_MOV:
-    case X64_ADD:
-    case X64_SUB:
-    case X64_CMP:
-      break;
-    default:
-      return false;
-  }
-
-  assert(instr->r1 && instr->r2);
-  return op_is_stack_or_data(instr->r1) && op_is_stack_or_data(instr->r2);
-}
-
-static bool imm_too_large(x64_Instruction* instr) {
-  switch (instr->ty) {
-    case X64_MOV:
-      if (!op_is_stack_or_data(instr->r2)) {
-        return false;
-      }
-    case X64_ADD:
-    case X64_SUB:
-    case X64_PUSH:
-      if (instr->r1->ty == X64_OP_IMM && instr->r1->imm > INT_MAX) {
-        return true;
-      }
-    default:
-      return false;
+  if (r2->ty == X64_OP_IMM) {
+    // idiv isn't allowed with immediate args
+    // instead, move the arg into a register then idiv on that
+    x64_Operand* r10 = reg(REG_R10, size);
+    mov(cx, r2, r10, size);
+    instr1(cx, X64_IDIV, r10, size);
+  } else {
+    instr1(cx, X64_IDIV, r2, size);
   }
 }
 
-static bool requires_intermediate_register_mov(x64_Instruction* instr) {
-  return is_mem_to_mem(instr) || imm_too_large(instr);
-}
+static void movsx(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size from,
+                  x64_Size to) {
+  if (r1->ty == X64_OP_IMM) {
+    x64_Operand* r10 = reg(REG_R10, from);
+    instr2(cx, X64_MOV, r1, r10, from);
+    r1 = r10;
+  }
 
-static void insert_intermediate_move(Context* cx, x64_Instruction* instr) {
-  // mov r1, %r10d
-  // {op} %r10d, r2
-  x64_Operand* r10 = reg(REG_R10, instr->size);
-  mov(cx, instr->r1, r10, instr->size);
-  instr2(cx, instr->ty, r10, instr->r2, instr->size);
+  if (op_is_stack_or_data(r2)) {
+    x64_Operand* r11 = reg(REG_R11, to);
+    instr2(cx, X64_MOVSX, r1, r11, to);
+    instr2(cx, X64_MOV, r11, r2, to);
+  } else {
+    instr2(cx, X64_MOVSX, r1, r2, to);
+  }
 }
 
 //
 // x64 generation passes
 //
-static x64_Function* fixup_instructions(x64_Function* input) {
-  x64_Function* ret = function(input->name);
-  ret->global = input->global;
-
-  // Round up stack to nearest 16 bytes.
-  if (input->stack_size % 16) {
-    input->stack_size += (16 - input->stack_size % 16);
-  }
-
-  // allocate stack for function local variables.
-  Context cx = {.out = ret->instructions};
-  instr2(&cx, X64_SUB, imm(input->stack_size), reg(REG_SP, QUADWORD), QUADWORD);
-  vec_for_each(input->instructions, x64_Instruction, instr) {
-    // TODO refactor
-    if (requires_intermediate_register_mov(iter.instr)) {
-      insert_intermediate_move(&cx, iter.instr);
-      continue;
-    } else if (iter.instr->ty == X64_IDIV && iter.instr->r1->ty == X64_OP_IMM) {
-      // idiv isn't allowed with immediate args
-      // instead, move the arg into a register then idiv on that
-      x64_Operand* r10 = reg(REG_R10, iter.instr->size);
-      mov(&cx, iter.instr->r1, r10, iter.instr->size);
-      instr1(&cx, X64_IDIV, r10, iter.instr->size);
-    } else if (iter.instr->ty == X64_MUL) {
-      x64_Operand* src = iter.instr->r1;
-      if (iter.instr->r1->ty == X64_OP_IMM && iter.instr->r1->imm > INT_MAX) {
-        x64_Operand* r10 = reg(REG_R10, iter.instr->size);
-        mov(&cx, iter.instr->r1, r10, iter.instr->size);
-        src = r10;
-      }
-
-      if (op_is_stack_or_data(iter.instr->r2)) {
-        // mul can't use a stack location as its r2
-        x64_Operand* r11 = reg(REG_R11, iter.instr->size);
-        mov(&cx, iter.instr->r2, r11, iter.instr->size);
-        instr2(&cx, X64_MUL, src, r11, iter.instr->size);
-        mov(&cx, r11, iter.instr->r2, iter.instr->size);
-      } else {
-        instr2(&cx, X64_MUL, src, iter.instr->r2, iter.instr->size);
-      }
-    } else if (iter.instr->ty == X64_CMP) {
-      x64_Operand* src = iter.instr->r1;
-
-      if (iter.instr->r1->ty == X64_OP_IMM && iter.instr->r1->imm > INT_MAX) {
-        x64_Operand* r10 = reg(REG_R10, iter.instr->size);
-        mov(&cx, iter.instr->r1, r10, iter.instr->size);
-        src = r10;
-      }
-
-      if (iter.instr->r2->ty == X64_OP_IMM) {
-        // cmp can't have an imm as its r2
-        x64_Operand* r11 = reg(REG_R11, iter.instr->size);
-        mov(&cx, iter.instr->r2, r11, iter.instr->size);
-        instr2(&cx, X64_CMP, src, r11, iter.instr->size);
-      } else {
-        instr2(&cx, X64_CMP, src, iter.instr->r2, iter.instr->size);
-      }
-    } else if (iter.instr->ty == X64_MOVSX &&
-               (iter.instr->r1->ty == X64_OP_IMM ||
-                op_is_stack_or_data(iter.instr->r2))) {
-      // movsx can't use imm as source or memory as dst
-      x64_Operand* src = iter.instr->r1;
-      if (iter.instr->r1->ty == X64_OP_IMM) {
-        x64_Operand* r10 = reg(REG_R10, iter.instr->r1->size);
-        mov(&cx, iter.instr->r1, r10, iter.instr->r1->size);
-        src = r10;
-      }
-      assert(src->size);
-
-      // For simplicity when fixing up movsx, we always movsx to r11 even if r2
-      // is a register.
-      x64_Operand* r11 = reg(REG_R11, iter.instr->r2->size);
-      assert(r11->size);
-
-      instr2(&cx, X64_MOVSX, src, r11, iter.instr->r2->size);
-      mov(&cx, r11, iter.instr->r2, iter.instr->r2->size);
-    } else {
-      push_instr(&cx, *iter.instr);
-    }
-  }
-  return ret;
-}
 
 static x64_Function* convert_function(IrFunction* ir_function,
                                       SymbolTable* st) {
   x64_Function* ret = function(ir_function->name);
   ret->global = ir_function->global;
+
+  // Reserve space for the first sub instruction to allocate stack space for
+  // local variables. We don't yet know how much space to allocate, so this will
+  // be filled out at the end of this function.
+  vec_push_empty(ret->instructions);
 
   Context cx = {.symbol_table = st,
                 .stack_map = hashmap_new(),
@@ -507,7 +510,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
         // this is rewritten as a cmp 0, r1
         ir->r2 = ir->r1;
         ir->r1 = constant(zero(ir_val_c_type(&cx, ir->r1)));
-        comparison(&cx, CC_E, ir);
+        cmp_and_setcc(&cx, CC_E, ir);
         break;
       }
       case IR_ADD: {
@@ -523,27 +526,27 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_GT: {
-        comparison(&cx, CC_G, ir);
+        cmp_and_setcc(&cx, CC_G, ir);
         break;
       }
       case IR_GTEQ: {
-        comparison(&cx, CC_GE, ir);
+        cmp_and_setcc(&cx, CC_GE, ir);
         break;
       }
       case IR_LT: {
-        comparison(&cx, CC_L, ir);
+        cmp_and_setcc(&cx, CC_L, ir);
         break;
       }
       case IR_LTEQ: {
-        comparison(&cx, CC_LE, ir);
+        cmp_and_setcc(&cx, CC_LE, ir);
         break;
       }
       case IR_EQ: {
-        comparison(&cx, CC_E, ir);
+        cmp_and_setcc(&cx, CC_E, ir);
         break;
       }
       case IR_NEQ: {
-        comparison(&cx, CC_NE, ir);
+        cmp_and_setcc(&cx, CC_NE, ir);
         break;
       }
       case IR_DIV: {
@@ -567,14 +570,12 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_JZ: {
-        instr2(&cx, X64_CMP, &ZERO, to_x64_op(&cx, ir->r1),
-               asm_size_of(&cx, ir));
+        cmp(&cx, &ZERO, to_x64_op(&cx, ir->r1), asm_size_of(&cx, ir));
         jmpcc(&cx, CC_E, ir->label);
         break;
       }
       case IR_JNZ: {
-        instr2(&cx, X64_CMP, &ZERO, to_x64_op(&cx, ir->r1),
-               asm_size_of(&cx, ir));
+        cmp(&cx, &ZERO, to_x64_op(&cx, ir->r1), asm_size_of(&cx, ir));
         jmpcc(&cx, CC_NE, ir->label);
         break;
       }
@@ -590,9 +591,8 @@ static x64_Function* convert_function(IrFunction* ir_function,
       case IR_SIGN_EXTEND: {
         assert(ir_val_to_size(&cx, ir->r1) == LONGWORD);
         assert(ir_val_to_size(&cx, ir->dst) == QUADWORD);
-
-        instr2(&cx, X64_MOVSX, to_x64_op(&cx, ir->r1), to_x64_op(&cx, ir->dst),
-               QUADWORD);
+        movsx(&cx, to_x64_op(&cx, ir->r1), to_x64_op(&cx, ir->dst), LONGWORD,
+              QUADWORD);
         break;
       }
       case IR_TRUNCATE: {
@@ -606,7 +606,8 @@ static x64_Function* convert_function(IrFunction* ir_function,
         // adjust stack if we have an odd number of arguments.
         // The x64 stack must be 16 byte aligned.
         if (ir->args->len > kNumArgumentRegs && (ir->args->len % 2)) {
-          instr2(&cx, X64_SUB, imm(8), reg(REG_SP, QUADWORD), QUADWORD);
+          instr2(&cx, X64_SUB, imm(8, QUADWORD), reg(REG_SP, QUADWORD),
+                 QUADWORD);
           stack_to_dealloc += 8;
         }
 
@@ -630,11 +631,11 @@ static x64_Function* convert_function(IrFunction* ir_function,
             // convenience.
             if (arg->ty == X64_OP_IMM || arg->ty == X64_OP_REG ||
                 size == QUADWORD) {
-              instr1(&cx, X64_PUSH, arg, size);
+              push(&cx, arg, size);
             } else {
               x64_Operand* rax = reg(REG_AX, arg->size);
               mov(&cx, arg, rax, size);
-              instr1(&cx, X64_PUSH, rax, size);
+              push(&cx, rax, size);
             }
             // must deallocate stack reserved for arguments pushed onto the
             // stack.
@@ -651,8 +652,8 @@ static x64_Function* convert_function(IrFunction* ir_function,
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          instr2(&cx, X64_ADD, imm(stack_to_dealloc), reg(REG_SP, QUADWORD),
-                 QUADWORD);
+          instr2(&cx, X64_ADD, imm(stack_to_dealloc, QUADWORD),
+                 reg(REG_SP, QUADWORD), QUADWORD);
         }
 
         // Move the return value in RAX to the call's destination.
@@ -667,6 +668,22 @@ static x64_Function* convert_function(IrFunction* ir_function,
   }
 
   ret->stack_size = cx.stack_pos;
+  if (ret->stack_size % 16) {
+    ret->stack_size += (16 - ret->stack_size % 16);
+  }
+
+  // Fill out alloc_stack instruction at the start of the function.
+  // Note that this has to be accessed here. If we access it and save it at the
+  // beginning of the function, the vector may be reallocated by the time we get
+  // here.
+  x64_Instruction* alloc_stack = vec_get(ret->instructions, 0);
+  *alloc_stack = (x64_Instruction){
+      .ty = X64_SUB,
+      .r1 = imm(ret->stack_size, QUADWORD),
+      .r2 = reg(REG_SP, QUADWORD),
+      .size = QUADWORD,
+  };
+
   return ret;
 }
 
@@ -694,8 +711,7 @@ x64_Program* generate_x86(IrProgram* ast_program) {
   x64_prog->functions = vec_new(sizeof(x64_Function));
   x64_prog->static_variables = vec_new(sizeof(x64_StaticVariable));
   vec_for_each(ast_program->functions, IrFunction, ir_func) {
-    x64_Function* f = fixup_instructions(
-        convert_function(iter.ir_func, ast_program->symbol_table));
+    x64_Function* f = convert_function(iter.ir_func, ast_program->symbol_table);
     vec_push(x64_prog->functions, f);
   }
 

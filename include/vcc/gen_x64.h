@@ -92,6 +92,7 @@ typedef struct {
     x64_ConditionCode cc;
 
     // For JMP, LABEL, and CALL instructions, r1 contains the label
+    // TODO: consider renaming this to src/dst to make it less confusing.
     x64_Operand* r1;
     x64_Operand* r2;
   };

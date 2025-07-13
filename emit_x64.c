@@ -34,7 +34,16 @@ static void emit(Context* cx, const char* fmt, ...) {
 static void emit_operand(Context* cx, const x64_Operand* op) {
   switch (op->ty) {
     case X64_OP_IMM: {
-      emit(cx, "$%lld", op->imm);
+      switch (op->size) {
+        case QUADWORD:
+          emit(cx, "$%ld", (long)op->imm);
+          break;
+        case LONGWORD:
+          emit(cx, "$%d", (int)op->imm);
+          break;
+        default:
+          assert(false);
+      }
       break;
     }
     case X64_OP_REG: {
