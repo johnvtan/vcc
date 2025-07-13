@@ -8,7 +8,6 @@
 typedef enum {
   X64_OP_IMM,
   X64_OP_REG,
-  X64_OP_PSEUDO,
   X64_OP_STACK,
   X64_OP_LABEL,
   X64_OP_DATA,
@@ -43,9 +42,6 @@ typedef struct {
 
   // X64_OP_REG
   x64_RegType reg;
-
-  // X64_OP_PSEUDO
-  String* pseudo;
 
   // X64_OP_STACK
   int stack;
