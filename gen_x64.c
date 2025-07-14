@@ -598,7 +598,15 @@ static x64_Function* convert_function(IrFunction* ir_function,
       case IR_TRUNCATE: {
         assert(ir_val_to_size(&cx, ir->r1) == QUADWORD);
         assert(ir_val_to_size(&cx, ir->dst) == LONGWORD);
-        mov(&cx, to_x64_op(&cx, ir->r1), to_x64_op(&cx, ir->dst), LONGWORD);
+
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+
+        // Truncate here to placate the assembler.
+        if (src->ty == X64_OP_IMM) {
+          src->imm = (int)src->imm;
+        }
+
+        mov(&cx, src, to_x64_op(&cx, ir->dst), LONGWORD);
         break;
       }
       case IR_FN_CALL: {
