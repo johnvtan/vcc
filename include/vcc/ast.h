@@ -16,6 +16,8 @@ typedef enum CType {
   TYPE_NONE = 0,  // used for catching errors
   TYPE_INT,
   TYPE_LONG,
+  TYPE_UINT,
+  TYPE_ULONG,
 } CType;
 
 // Container for a compile time constant.

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <vcc/ast.h>
@@ -155,6 +156,8 @@ static bool is_type_specifier(TokenType t) {
   switch (t) {
     case TK_LONG:
     case TK_INT:
+    case TK_SIGNED:
+    case TK_UNSIGNED:
       return true;
     default:
       return false;
@@ -186,19 +189,42 @@ static StorageClass to_storage_class(TokenType t) {
 static CType specs_to_ctype(Vec* specs) {
   size_t int_counts = 0;
   size_t long_counts = 0;
+  size_t signed_counts = 0;
+  size_t unsigned_counts = 0;
+
   vec_for_each(specs, TokenType, ty) {
-    if (*iter.ty == TK_INT) {
-      int_counts++;
-    } else if (*iter.ty == TK_LONG) {
-      long_counts++;
-    } else {
-      assert(false);
+    switch (*iter.ty) {
+      case TK_INT:
+        int_counts++;
+        break;
+      case TK_LONG:
+        long_counts++;
+        break;
+      case TK_SIGNED:
+        signed_counts++;
+        break;
+      case TK_UNSIGNED:
+        unsigned_counts++;
+        break;
+      default:
+        assert(false);
     }
   }
 
-  if (int_counts > 1 || long_counts > 1) {
-    panic("Invalid type specifier: got %zu int %zu long", int_counts,
-          long_counts);
+  if (int_counts > 1 || long_counts > 1 || unsigned_counts > 1 ||
+      signed_counts > 1) {
+    panic(
+        "Invalid type specifier: got %zu int %zu long %zu signed %zu unsigned",
+        int_counts, long_counts, signed_counts, unsigned_counts);
+  }
+
+  if (signed_counts && unsigned_counts) {
+    panic("Invalid type specifier: got both signed (%zu) and unsigned (%zu)",
+          signed_counts, unsigned_counts);
+  }
+
+  if (unsigned_counts) {
+    return long_counts ? TYPE_ULONG : TYPE_UINT;
   }
 
   return long_counts ? TYPE_LONG : TYPE_INT;
@@ -329,28 +355,41 @@ static AstExpr* parse_variable(ParseContext* cx) {
 }
 
 static AstExpr* parse_primary(ParseContext* cx) {
-  if (match(cx, TK_INT_CONST) || match(cx, TK_LONG_CONST)) {
+  if (match(cx, TK_INT_CONST) || match(cx, TK_LONG_CONST) ||
+      match(cx, TK_UINT_CONST) || match(cx, TK_ULONG_CONST)) {
     Token t = consume(cx);
-    AstExpr* constant = expr(EXPR_CONST);
-    uint64_t parsed = strtoll(cstring(t.content), NULL, 10);
-    if (parsed > LONG_MAX) {
-      panic("Parsed integer constant too large: %llu", parsed);
+    const bool is_signed = t.ty == TK_INT_CONST || t.ty == TK_LONG_CONST;
+    const uint64_t parsed = strtoll(cstring(t.content), NULL, 10);
+    CType c_type = TYPE_NONE;
+
+    if (is_signed) {
+      if (parsed > LONG_MAX) {
+        panic("Parsed signed integer constant too large: %llu", parsed);
+      }
+
+      // For integer constants, we can implicitly decide that it's a long
+      // constant if the parsed value is greater than INT_MAX.
+      if (parsed <= INT_MAX && t.ty == TK_INT_CONST) {
+        c_type = TYPE_INT;
+      } else {
+        c_type = TYPE_LONG;
+      }
+    } else {
+      if (parsed == ULONG_MAX && errno == ERANGE) {
+        panic("Parsed unsigned integer constant too large", 1);
+      }
+
+      if (parsed <= UINT_MAX && t.ty == TK_UINT_CONST) {
+        c_type = TYPE_UINT;
+      } else {
+        c_type = TYPE_ULONG;
+      }
     }
 
-    // For integer constants, we can implicitly decide that it's a long
-    // constant if the parsed value is greater than INT_MAX.
-    if (parsed <= INT_MAX && t.ty == TK_INT_CONST) {
-      constant->c_type = TYPE_INT;
-      constant->const_ = (CompTimeConst){
-          .c_type = TYPE_INT,
-      };
-    } else {
-      constant->c_type = TYPE_LONG;
-      constant->const_ = (CompTimeConst){
-          .c_type = TYPE_LONG,
-      };
-    }
+    AstExpr* constant = expr(EXPR_CONST);
     constant->const_.storage_ = parsed;
+    constant->c_type = c_type;
+    constant->const_.c_type = c_type;
     return constant;
   }
 

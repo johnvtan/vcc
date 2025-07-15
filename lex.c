@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <stdlib.h>  // qsort
 #include <string.h>  // strlen
 #include <vcc/lex.h>
@@ -13,22 +14,56 @@ typedef struct {
 } KeywordMatch;
 
 static KeywordMatch KEYWORD_MATCHES[] = {
-    {TK_INT, "int"},       {TK_LONG, "long"},     {TK_VOID, "void"},
-    {TK_RETURN, "return"}, {TK_OPEN_PAREN, "("},  {TK_CLOSE_PAREN, ")"},
-    {TK_OPEN_BRACE, "{"},  {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},
-    {TK_TILDE, "~"},       {TK_DASH, "-"},        {TK_DASHDASH, "--"},
-    {TK_PLUS, "+"},        {TK_PLUSPLUS, "++"},   {TK_STAR, "*"},
-    {TK_SLASH, "/"},       {TK_PERCENT, "%"},     {TK_BANG, "!"},
-    {TK_AMPAMP, "&&"},     {TK_PIPEPIPE, "||"},   {TK_EQEQ, "=="},
-    {TK_BANGEQ, "!="},     {TK_LT, "<"},          {TK_GT, ">"},
-    {TK_LTEQ, "<="},       {TK_GTEQ, ">="},       {TK_EQ, "="},
-    {TK_PLUSEQ, "+="},     {TK_DASHEQ, "-="},     {TK_STAREQ, "*="},
-    {TK_SLASHEQ, "/="},    {TK_PERCENTEQ, "%="},  {TK_IF, "if"},
-    {TK_ELSE, "else"},     {TK_QUESTION, "?"},    {TK_COLON, ":"},
-    {TK_GOTO, "goto"},     {TK_DO, "do"},         {TK_WHILE, "while"},
-    {TK_FOR, "for"},       {TK_BREAK, "break"},   {TK_CONTINUE, "continue"},
-    {TK_SWITCH, "switch"}, {TK_CASE, "case"},     {TK_DEFAULT, "default"},
-    {TK_COMMA, ","},       {TK_STATIC, "static"}, {TK_EXTERN, "extern"},
+    {TK_INT, "int"},
+    {TK_LONG, "long"},
+    {TK_UNSIGNED, "unsigned"},
+    {TK_SIGNED, "signed"},
+    {TK_VOID, "void"},
+    {TK_RETURN, "return"},
+    {TK_OPEN_PAREN, "("},
+    {TK_CLOSE_PAREN, ")"},
+    {TK_OPEN_BRACE, "{"},
+    {TK_CLOSE_BRACE, "}"},
+    {TK_SEMICOLON, ";"},
+    {TK_TILDE, "~"},
+    {TK_DASH, "-"},
+    {TK_DASHDASH, "--"},
+    {TK_PLUS, "+"},
+    {TK_PLUSPLUS, "++"},
+    {TK_STAR, "*"},
+    {TK_SLASH, "/"},
+    {TK_PERCENT, "%"},
+    {TK_BANG, "!"},
+    {TK_AMPAMP, "&&"},
+    {TK_PIPEPIPE, "||"},
+    {TK_EQEQ, "=="},
+    {TK_BANGEQ, "!="},
+    {TK_LT, "<"},
+    {TK_GT, ">"},
+    {TK_LTEQ, "<="},
+    {TK_GTEQ, ">="},
+    {TK_EQ, "="},
+    {TK_PLUSEQ, "+="},
+    {TK_DASHEQ, "-="},
+    {TK_STAREQ, "*="},
+    {TK_SLASHEQ, "/="},
+    {TK_PERCENTEQ, "%="},
+    {TK_IF, "if"},
+    {TK_ELSE, "else"},
+    {TK_QUESTION, "?"},
+    {TK_COLON, ":"},
+    {TK_GOTO, "goto"},
+    {TK_DO, "do"},
+    {TK_WHILE, "while"},
+    {TK_FOR, "for"},
+    {TK_BREAK, "break"},
+    {TK_CONTINUE, "continue"},
+    {TK_SWITCH, "switch"},
+    {TK_CASE, "case"},
+    {TK_DEFAULT, "default"},
+    {TK_COMMA, ","},
+    {TK_STATIC, "static"},
+    {TK_EXTERN, "extern"},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
@@ -178,16 +213,29 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
   // An integral suffix (for now) is only one character. Eventually, we'll need
   // to handle suffixes with multiple characters, like UL.
   TokenType out_ty = TK_INT_CONST;
-  char next_char = file_pos_peek_char_at(pos, n);
-  switch (next_char) {
-    case 'l':
-    case 'L':
+
+  String* suffix = string_new();
+  char next_char;
+  while ((next_char = tolower(file_pos_peek_char_at(pos, n)))) {
+    if (next_char == 'l' || next_char == 'u') {
+      string_append(suffix, next_char);
       n++;
-      out_ty = TK_LONG_CONST;
-      next_char = file_pos_peek_char_at(pos, n);
-      break;
-    default:
-      break;
+      continue;
+    }
+    break;
+  }
+
+  if (string_len(suffix) == 0) {
+    out_ty = TK_INT_CONST;
+  } else if (string_eq2(suffix, "l")) {
+    out_ty = TK_LONG_CONST;
+  } else if (string_eq2(suffix, "u")) {
+    out_ty = TK_UINT_CONST;
+  } else if (string_eq2(suffix, "lu") || string_eq2(suffix, "ul")) {
+    out_ty = TK_ULONG_CONST;
+  } else {
+    emit_error(pos, "Invalid numeric literal suffix");
+    return false;
   }
 
   // TODO: we have to check that the number ends at a word boundary.
