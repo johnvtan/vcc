@@ -18,11 +18,51 @@ static void typecheck_expr(Context* cx, AstExpr* expr);
 //
 // Type conversion helpers.
 //
+
+typedef enum {
+  SIZE_INT,
+  SIZE_LONG,
+} TypeSize;
+
+TypeSize get_type_size(CType ty) {
+  switch (ty) {
+    case TYPE_INT:
+    case TYPE_UINT:
+      return SIZE_INT;
+    case TYPE_LONG:
+    case TYPE_ULONG:
+      return SIZE_LONG;
+    default:
+      assert(false);
+  }
+}
+
+bool type_is_signed(CType ty) {
+  switch (ty) {
+    case TYPE_INT:
+    case TYPE_LONG:
+      return true;
+    default:
+      return false;
+  }
+}
+
 CType get_common_type(CType t1, CType t2) {
   if (t1 == t2) {
     return t1;
   }
-  return TYPE_LONG;
+
+  TypeSize t1_size = get_type_size(t1);
+  TypeSize t2_size = get_type_size(t2);
+
+  if (t1_size == t2_size) {
+    if (type_is_signed(t1)) {
+      return t2;
+    }
+    return t1;
+  }
+
+  return t1_size > t2_size ? t1 : t2;
 }
 
 static AstExpr* cast(AstExpr* e, CType target_type) {
@@ -45,13 +85,30 @@ static AstExpr* convert_to(AstExpr* e, CType target_type) {
   return cast(e, target_type);
 }
 
+static uint64_t cast_underlying_storage(uint64_t val, CType target_type) {
+  switch (target_type) {
+    case TYPE_INT:
+      return (int)val;
+    case TYPE_LONG:
+      return (long)val;
+    case TYPE_UINT:
+      return (unsigned int)val;
+    case TYPE_ULONG:
+      return (unsigned long)val;
+    default:
+      assert(false);
+  }
+}
+
 static CompTimeConst convert_comptime_const_to(CompTimeConst c,
                                                CType target_type) {
   if (c.c_type == target_type) {
     return c;
   }
 
-  CompTimeConst ret = {.c_type = target_type, .storage_ = c.storage_};
+  CompTimeConst ret = {
+      .c_type = target_type,
+      .storage_ = cast_underlying_storage(c.storage_, target_type)};
   return ret;
 }
 
@@ -59,7 +116,9 @@ static StaticInit convert_static_init_to(StaticInit init, CType target_type) {
   if (init.c_type == target_type) {
     return init;
   }
-  return (StaticInit){.c_type = target_type, .storage_ = init.storage_};
+  return (StaticInit){
+      .c_type = target_type,
+      .storage_ = cast_underlying_storage(init.storage_, target_type)};
 }
 
 static StaticInit to_static_init(AstExpr* e) {
@@ -434,6 +493,10 @@ static String* comptime_const_to_string(CompTimeConst c) {
       return string_format("%d", c.storage_);
     case TYPE_LONG:
       return string_format("%ldL", c.storage_);
+    case TYPE_UINT:
+      return string_format("%uU", c.storage_);
+    case TYPE_ULONG:
+      return string_format("%uUL", c.storage_);
     default:
       assert(false);
   }
