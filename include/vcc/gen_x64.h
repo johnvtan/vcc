@@ -61,8 +61,9 @@ typedef enum {
   X64_ADD,
   X64_SUB,
   X64_MUL,
-  X64_IDIV,
-  X64_CDQ,  // sign extend
+  X64_DIV,   // unsigned division
+  X64_IDIV,  // signed division
+  X64_CDQ,   // sign extend
   X64_CMP,
   X64_JMP,
   X64_JMPCC,
@@ -73,12 +74,21 @@ typedef enum {
 } x64_InstructionType;
 
 typedef enum {
+  // Used for both signed and unsigned
   CC_E,
   CC_NE,
+
+  // Used for signed integers.
   CC_G,
   CC_GE,
   CC_L,
   CC_LE,
+
+  // Used for unsigned integers.
+  CC_A,
+  CC_AE,
+  CC_B,
+  CC_BE,
 } x64_ConditionCode;
 
 typedef struct {

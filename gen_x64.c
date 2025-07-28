@@ -30,8 +30,10 @@ static int size_to_bytes(x64_Size size) {
 static x64_Size type_to_size(CType c_type) {
   switch (c_type) {
     case TYPE_INT:
+    case TYPE_UINT:
       return LONGWORD;
     case TYPE_LONG:
+    case TYPE_ULONG:
       return QUADWORD;
     default:
       assert(false);
@@ -401,22 +403,32 @@ static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
   setcc(cx, cc, dst);
 }
 
-static void idiv(Context* cx, IrInstruction* ir) {
+static void divide(Context* cx, IrInstruction* ir) {
+  CType c_type = ir_val_c_type(cx, ir->r1);
+  assert(c_type == ir_val_c_type(cx, ir->r2));
+
   x64_Size size = asm_size_of(cx, ir);
   x64_Operand* r1 = to_x64_op(cx, ir->r1);
   x64_Operand* r2 = to_x64_op(cx, ir->r2);
+  const bool is_signed = type_is_signed(c_type);
 
   mov(cx, r1, reg(REG_AX, size), size);
-  instr0(cx, X64_CDQ, size);
+  if (is_signed) {
+    instr0(cx, X64_CDQ, size);
+  } else {
+    mov(cx, imm(0, size), reg(REG_DX, size), size);
+  }
+
+  x64_InstructionType div_instr = is_signed ? X64_IDIV : X64_DIV;
 
   if (r2->ty == X64_OP_IMM) {
     // idiv isn't allowed with immediate args
     // instead, move the arg into a register then idiv on that
     x64_Operand* r10 = reg(REG_R10, size);
     mov(cx, r2, r10, size);
-    instr1(cx, X64_IDIV, r10, size);
+    instr1(cx, div_instr, r10, size);
   } else {
-    instr1(cx, X64_IDIV, r2, size);
+    instr1(cx, div_instr, r2, size);
   }
 }
 
@@ -526,19 +538,39 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_GT: {
-        cmp_and_setcc(&cx, CC_G, ir);
+        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
+          cmp_and_setcc(&cx, CC_G, ir);
+        } else {
+          cmp_and_setcc(&cx, CC_A, ir);
+        }
         break;
       }
       case IR_GTEQ: {
-        cmp_and_setcc(&cx, CC_GE, ir);
+        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
+          cmp_and_setcc(&cx, CC_GE, ir);
+        } else {
+          cmp_and_setcc(&cx, CC_AE, ir);
+        }
         break;
       }
       case IR_LT: {
-        cmp_and_setcc(&cx, CC_L, ir);
+        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
+          cmp_and_setcc(&cx, CC_L, ir);
+        } else {
+          cmp_and_setcc(&cx, CC_B, ir);
+        }
         break;
       }
       case IR_LTEQ: {
-        cmp_and_setcc(&cx, CC_LE, ir);
+        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
+          cmp_and_setcc(&cx, CC_LE, ir);
+        } else {
+          cmp_and_setcc(&cx, CC_BE, ir);
+        }
         break;
       }
       case IR_EQ: {
@@ -551,7 +583,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
       }
       case IR_DIV: {
         // do Idiv and return ax
-        idiv(&cx, ir);
+        divide(&cx, ir);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Size size = asm_size_of(&cx, ir);
         mov(&cx, reg(REG_AX, size), dst, size);
@@ -559,7 +591,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
       }
       case IR_REM: {
         // do Idiv and return dx
-        idiv(&cx, ir);
+        divide(&cx, ir);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Size size = asm_size_of(&cx, ir);
         mov(&cx, reg(REG_DX, size), dst, size);
@@ -607,6 +639,22 @@ static x64_Function* convert_function(IrFunction* ir_function,
         }
 
         mov(&cx, src, to_x64_op(&cx, ir->dst), LONGWORD);
+        break;
+      }
+      case IR_ZERO_EXTEND: {
+        assert(ir->r1);
+        assert(ir->dst);
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+        x64_Size size = ir_val_to_size(&cx, ir->r1);
+
+        if (dst->ty == X64_OP_REG) {
+          mov(&cx, src, dst, size);
+        } else {
+          x64_Operand* r11 = reg(REG_R11, size);
+          mov(&cx, src, r11, size);
+          mov(&cx, r11, dst, size);
+        }
         break;
       }
       case IR_FN_CALL: {
@@ -702,9 +750,11 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
   ret->init = ir->init;
   switch (ret->init.c_type) {
     case TYPE_INT:
+    case TYPE_UINT:
       ret->alignment = 4;
       break;
     case TYPE_LONG:
+    case TYPE_ULONG:
       ret->alignment = 8;
       break;
     default:
