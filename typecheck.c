@@ -19,11 +19,6 @@ static void typecheck_expr(Context* cx, AstExpr* expr);
 // Type conversion helpers.
 //
 
-typedef enum {
-  SIZE_INT,
-  SIZE_LONG,
-} TypeSize;
-
 TypeSize get_type_size(CType ty) {
   switch (ty) {
     case TYPE_INT:

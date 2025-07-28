@@ -72,7 +72,17 @@ typedef struct {
   Vec* symbols;
 } SymbolTable;
 
-SymbolTable* typecheck_ast(AstProgram* prog);
-CType get_common_type(CType t1, CType t2);
+// An architecture-independent way for describing the size of a type. We don't
+// specify how many bytes these are in the IR.
+typedef enum {
+  SIZE_INT,
+  SIZE_LONG,
+} TypeSize;
 
+// Helpers for determining properties of types.
+CType get_common_type(CType t1, CType t2);
+TypeSize get_type_size(CType ty);
+bool type_is_signed(CType ty);
+
+SymbolTable* typecheck_ast(AstProgram* prog);
 #endif  // VCC_TYPECHECK_H

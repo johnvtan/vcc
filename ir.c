@@ -243,10 +243,24 @@ static IrVal* ir_cast(Context* cx, IrVal* val, CType from, CType to) {
   }
 
   IrVal* dst = temp(cx, to);
-  if (to == TYPE_LONG) {
-    push_inst(cx->out, unary(IR_SIGN_EXTEND, val, dst));
-  } else {
+
+  TypeSize from_size = get_type_size(from);
+  TypeSize to_size = get_type_size(to);
+
+  if (from_size == to_size) {
+    push_inst(cx->out, copy(val, dst));
+  } else if (from_size > to_size) {
     push_inst(cx->out, unary(IR_TRUNCATE, val, dst));
+  } else {
+    // This always has to be true, just putting this assert to remind myself.
+    // The type we're converting to is larger, so we have to figure out how
+    // to fill up the rest of the size based on the signedness of the type.
+    assert(from_size < to_size);
+    if (type_is_signed(from)) {
+      push_inst(cx->out, unary(IR_SIGN_EXTEND, val, dst));
+    } else {
+      push_inst(cx->out, unary(IR_ZERO_EXTEND, val, dst));
+    }
   }
 
   return dst;
