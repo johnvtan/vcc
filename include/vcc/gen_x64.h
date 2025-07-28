@@ -38,7 +38,8 @@ typedef enum {
 typedef struct {
   x64_OperandType ty;
   // X64_OP_IMM
-  int64_t imm;
+  uint64_t imm;
+  bool sign;
 
   // X64_OP_REG
   x64_RegType reg;

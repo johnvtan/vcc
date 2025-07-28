@@ -105,11 +105,16 @@ static x64_Operand ZERO = {
 //
 // x64_Operand helpers
 //
-static x64_Operand* imm(int64_t val, x64_Size size) {
+
+// TODO: refactor this. Using the c_type here feels like a mess.
+// In general, I think I need to refactor how constants are handled.
+// It's also unfortunate that I'm passing the size around everywhere.
+static x64_Operand* imm(uint64_t val, CType c_type) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
-  ret->size = size;
+  ret->size = type_to_size(c_type);
+  ret->sign = type_is_signed(c_type);
   return ret;
 }
 
@@ -187,7 +192,7 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
   x64_Operand* ret = NULL;
   switch (ir->ty) {
     case IR_VAL_CONST:
-      ret = imm(ir->constant.storage_, ir_val_to_size(cx, ir));
+      ret = imm(ir->constant.storage_, ir->constant.c_type);
       break;
     case IR_VAL_VAR:
       ret = pseudo(cx, ir->var);
@@ -258,8 +263,8 @@ static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
   bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
 
   // Can only move 32 bit immediates directly into memory.
-  bool imm_too_large =
-      op_is_stack_or_data(r2) && r1->ty == X64_OP_IMM && r1->imm > INT_MAX;
+  bool imm_too_large = op_is_stack_or_data(r2) && r1->ty == X64_OP_IMM &&
+                       r1->imm > (uint64_t)INT_MAX;
   if (is_mem_to_mem || imm_too_large) {
     // insert intermediate move to r10
     x64_Operand* r10 = reg(REG_R10, size);
@@ -299,7 +304,7 @@ static void unary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
 }
 
 static bool imm_bigger_than_int(x64_Operand* op) {
-  return op->ty == X64_OP_IMM && op->imm > INT_MAX;
+  return op->ty == X64_OP_IMM && op->imm > (uint64_t)INT_MAX;
 }
 
 static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
@@ -365,6 +370,11 @@ static void cmp(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size size) {
   const bool requires_move_to_r10 =
       (op_is_stack_or_data(r1) && op_is_stack_or_data(r2)) ||
       imm_bigger_than_int(r1);
+
+  // if (r1->ty == X64_OP_IMM) {
+  //   printf("cmp: imm %lu, imm_bigger_than_int: %u, INT_MAX=%u\n", r1->imm,
+  //   imm_bigger_than_int(r1), INT_MAX);
+  // }
   if (requires_move_to_r10) {
     // insert intermediate move from r2 to r10
     x64_Operand* r10 = reg(REG_R10, size);
@@ -398,7 +408,7 @@ static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
   cmp(cx, r2, r1, r1_size);
 
   // mov 0, dst
-  mov(cx, imm(0, dst_size), dst, dst_size);
+  mov(cx, imm(0, ir_val_c_type(cx, ir->dst)), dst, dst_size);
   // setcc(cc, dst)
   setcc(cx, cc, dst);
 }
@@ -416,7 +426,7 @@ static void divide(Context* cx, IrInstruction* ir) {
   if (is_signed) {
     instr0(cx, X64_CDQ, size);
   } else {
-    mov(cx, imm(0, size), reg(REG_DX, size), size);
+    mov(cx, imm(0, c_type), reg(REG_DX, size), size);
   }
 
   x64_InstructionType div_instr = is_signed ? X64_IDIV : X64_DIV;
@@ -651,9 +661,13 @@ static x64_Function* convert_function(IrFunction* ir_function,
         if (dst->ty == X64_OP_REG) {
           mov(&cx, src, dst, size);
         } else {
-          x64_Operand* r11 = reg(REG_R11, size);
-          mov(&cx, src, r11, size);
-          mov(&cx, r11, dst, size);
+          x64_Size dst_size = ir_val_to_size(&cx, ir->dst);
+
+          // Note that each R11 has different sizes here.
+          // TODO: I bet I can remove the sizes from each individual register
+          // and rely on the instruction size instead.
+          mov(&cx, src, reg(REG_R11, size), size);
+          mov(&cx, reg(REG_R11, dst_size), dst, dst_size);
         }
         break;
       }
@@ -662,7 +676,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
         // adjust stack if we have an odd number of arguments.
         // The x64 stack must be 16 byte aligned.
         if (ir->args->len > kNumArgumentRegs && (ir->args->len % 2)) {
-          instr2(&cx, X64_SUB, imm(8, QUADWORD), reg(REG_SP, QUADWORD),
+          instr2(&cx, X64_SUB, imm(8, TYPE_ULONG), reg(REG_SP, QUADWORD),
                  QUADWORD);
           stack_to_dealloc += 8;
         }
@@ -708,7 +722,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          instr2(&cx, X64_ADD, imm(stack_to_dealloc, QUADWORD),
+          instr2(&cx, X64_ADD, imm(stack_to_dealloc, TYPE_ULONG),
                  reg(REG_SP, QUADWORD), QUADWORD);
         }
 
@@ -735,7 +749,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
   x64_Instruction* alloc_stack = vec_get(ret->instructions, 0);
   *alloc_stack = (x64_Instruction){
       .ty = X64_SUB,
-      .r1 = imm(ret->stack_size, QUADWORD),
+      .r1 = imm(ret->stack_size, TYPE_ULONG),
       .r2 = reg(REG_SP, QUADWORD),
       .size = QUADWORD,
   };

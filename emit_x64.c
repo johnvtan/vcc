@@ -34,16 +34,21 @@ static void emit(Context* cx, const char* fmt, ...) {
 static void emit_operand(Context* cx, const x64_Operand* op) {
   switch (op->ty) {
     case X64_OP_IMM: {
-      switch (op->size) {
-        case QUADWORD:
-          emit(cx, "$%ld", (long)op->imm);
-          break;
-        case LONGWORD:
-          emit(cx, "$%d", (int)op->imm);
-          break;
-        default:
-          assert(false);
+      if (op->sign) {
+        emit(cx, "$%ld", op->imm);
+      } else {
+        emit(cx, "$%lu", op->imm);
       }
+      // switch (op->size) {
+      //   case QUADWORD:
+      //     emit(cx, "$%ld", (long)op->imm);
+      //     break;
+      //   case LONGWORD:
+      //     emit(cx, "$%d", (int)op->imm);
+      //     break;
+      //   default:
+      //     assert(false);
+      // }
       break;
     }
     case X64_OP_REG: {
@@ -126,8 +131,9 @@ static void emit_function_label(Context* cx, const String* label, bool global) {
 //
 static String* format_cc(const char* prefix, x64_ConditionCode cc) {
   static const char* cc_to_str[] = {
-      [CC_E] = "e",   [CC_NE] = "ne", [CC_L] = "l",
-      [CC_LE] = "le", [CC_G] = "g",   [CC_GE] = "ge",
+      [CC_E] = "e", [CC_NE] = "ne", [CC_L] = "l", [CC_LE] = "le",
+      [CC_G] = "g", [CC_GE] = "ge", [CC_A] = "a", [CC_AE] = "ae",
+      [CC_B] = "b", [CC_BE] = "be",
   };
 
   return string_format("%s%s", prefix, cc_to_str[cc]);
@@ -172,6 +178,10 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
     }
     case X64_IDIV: {
       emit1(cx, "idiv", inst->r1, inst->size);
+      break;
+    }
+    case X64_DIV: {
+      emit1(cx, "div", inst->r1, inst->size);
       break;
     }
     case X64_CDQ: {
@@ -265,6 +275,12 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
       break;
     case TYPE_LONG:
       emit(cx, "\t.quad %ld\n", (long)sv->init.storage_);
+      break;
+    case TYPE_UINT:
+      emit(cx, "\t.long %u\n", (unsigned int)sv->init.storage_);
+      break;
+    case TYPE_ULONG:
+      emit(cx, "\t.quad %lu\n", (unsigned long)sv->init.storage_);
       break;
     default:
       assert(false);

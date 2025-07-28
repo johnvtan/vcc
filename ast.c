@@ -359,7 +359,7 @@ static AstExpr* parse_primary(ParseContext* cx) {
       match(cx, TK_UINT_CONST) || match(cx, TK_ULONG_CONST)) {
     Token t = consume(cx);
     const bool is_signed = t.ty == TK_INT_CONST || t.ty == TK_LONG_CONST;
-    const uint64_t parsed = strtoll(cstring(t.content), NULL, 10);
+    const uint64_t parsed = strtoul(cstring(t.content), NULL, 10);
     CType c_type = TYPE_NONE;
 
     if (is_signed) {

@@ -196,9 +196,9 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
           "found %d",
           decl->var.init->ty);
     }
-    static_var.init.ty = INIT_HAS_VALUE;
     static_var.init = convert_static_init_to(to_static_init(decl->var.init),
-                                             decl->var.init->c_type);
+                                             decl->var.c_type);
+    static_var.init.ty = INIT_HAS_VALUE;
   } else if (decl->storage_class == SC_EXTERN) {
     static_var.init.ty = INIT_NONE;
   } else {
