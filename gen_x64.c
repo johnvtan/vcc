@@ -105,11 +105,11 @@ static x64_Operand ZERO = {
 // x64_Operand helpers
 //
 
-static x64_Operand* imm(uint64_t val, bool sign) {
+static x64_Operand* imm(uint64_t val, CType c_type) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
-  ret->sign = sign;
+  ret->sign = type_is_signed(c_type);
   return ret;
 }
 
@@ -687,7 +687,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          instr2(&cx, X64_ADD, imm(stack_to_dealloc, false), reg(REG_SP),
+          instr2(&cx, X64_ADD, imm(stack_to_dealloc, TYPE_ULONG), reg(REG_SP),
                  QUADWORD);
         }
 
@@ -714,7 +714,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
   x64_Instruction* alloc_stack = vec_get(ret->instructions, 0);
   *alloc_stack = (x64_Instruction){
       .ty = X64_SUB,
-      .r1 = imm(ret->stack_size, false),
+      .r1 = imm(ret->stack_size, TYPE_ULONG),
       .r2 = reg(REG_SP),
       .size = QUADWORD,
   };
