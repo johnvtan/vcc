@@ -257,15 +257,22 @@ static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
   }
 }
 
+static inline x64_Operand* mov_to_reg(Context* cx, x64_Operand* arg,
+                                      x64_RegType reg_ty, x64_Size size) {
+  x64_Operand* reg_op = reg(reg_ty);
+  instr2(cx, X64_MOV, arg, reg_op, size);
+  return reg_op;
+}
+
+static bool imm_bigger_than_int(x64_Operand* op) {
+  return op->ty == X64_OP_IMM && op->imm > (uint64_t)INT_MAX;
+}
+
 static inline void push(Context* cx, x64_Operand* arg, x64_Size size) {
-  if (arg->ty == X64_OP_IMM && arg->imm > INT_MAX) {
-    // insert intermediate move to r10
-    x64_Operand* r10 = reg(REG_R10);
-    instr2(cx, X64_MOV, arg, r10, size);
-    instr1(cx, X64_PUSH, r10, size);
-  } else {
-    instr1(cx, X64_PUSH, arg, size);
+  if (imm_bigger_than_int(arg)) {
+    arg = mov_to_reg(cx, arg, REG_R10, size);
   }
+  instr1(cx, X64_PUSH, arg, size);
 }
 
 static inline x64_Function* function(String* name) {
@@ -283,10 +290,6 @@ static void unary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
   mov(cx, to_x64_op(cx, ir->r1), dst, size);
   instr1(cx, ty, dst, size);
   return;
-}
-
-static bool imm_bigger_than_int(x64_Operand* op) {
-  return op->ty == X64_OP_IMM && op->imm > (uint64_t)INT_MAX;
 }
 
 static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
@@ -314,19 +317,14 @@ static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
     case X64_SUB: {
       bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
       if (is_mem_to_mem || imm_bigger_than_int(r1)) {
-        x64_Operand* r10 = reg(REG_R10);
-        instr2(cx, X64_MOV, r1, r10, size);
-        instr2(cx, ty, r10, r2, size);
-      } else {
-        instr2(cx, ty, r1, r2, size);
+        r1 = mov_to_reg(cx, r1, REG_R10, size);
       }
+      instr2(cx, ty, r1, r2, size);
       return;
     }
     case X64_MUL: {
       if (imm_bigger_than_int(r1)) {
-        x64_Operand* r10 = reg(REG_R10);
-        instr2(cx, X64_MOV, r1, r10, size);
-        r1 = r10;
+        r1 = mov_to_reg(cx, r1, REG_R10, size);
       }
 
       if (op_is_stack_or_data(r2)) {
@@ -353,23 +351,15 @@ static void cmp(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size size) {
       (op_is_stack_or_data(r1) && op_is_stack_or_data(r2)) ||
       imm_bigger_than_int(r1);
 
-  // if (r1->ty == X64_OP_IMM) {
-  //   printf("cmp: imm %lu, imm_bigger_than_int: %u, INT_MAX=%u\n", r1->imm,
-  //   imm_bigger_than_int(r1), INT_MAX);
-  // }
   if (requires_move_to_r10) {
     // insert intermediate move from r2 to r10
-    x64_Operand* r10 = reg(REG_R10);
-    instr2(cx, X64_MOV, r1, r10, size);
-    r1 = r10;
+    r1 = mov_to_reg(cx, r1, REG_R10, size);
   }
 
   if (r2->ty == X64_OP_IMM) {
     // cmp can't have an imm as its r2, move r2 to r11 and use r11 as the
     // argument.
-    x64_Operand* r11 = reg(REG_R11);
-    mov(cx, r2, r11, size);
-    r2 = r11;
+    r2 = mov_to_reg(cx, r2, REG_R11, size);
   }
 
   // cmp r2, r1
@@ -416,20 +406,15 @@ static void divide(Context* cx, IrInstruction* ir) {
   if (r2->ty == X64_OP_IMM) {
     // idiv isn't allowed with immediate args
     // instead, move the arg into a register then idiv on that
-    x64_Operand* r10 = reg(REG_R10);
-    mov(cx, r2, r10, size);
-    instr1(cx, div_instr, r10, size);
-  } else {
-    instr1(cx, div_instr, r2, size);
+    r2 = mov_to_reg(cx, r2, REG_R10, size);
   }
+  instr1(cx, div_instr, r2, size);
 }
 
 static void movsx(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size from,
                   x64_Size to) {
   if (r1->ty == X64_OP_IMM) {
-    x64_Operand* r10 = reg(REG_R10);
-    instr2(cx, X64_MOV, r1, r10, from);
-    r1 = r10;
+    r1 = mov_to_reg(cx, r1, REG_R10, from);
   }
 
   if (op_is_stack_or_data(r2)) {
