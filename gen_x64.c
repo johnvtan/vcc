@@ -99,46 +99,38 @@ static x64_Size asm_size_of(Context* cx, IrInstruction* ir) {
 static x64_Operand ZERO = {
     .ty = X64_OP_IMM,
     .imm = 0,
-    .size = QUADWORD,  // TODO maybe this is okay for zero, not sure
 };
 
 //
 // x64_Operand helpers
 //
 
-// TODO: refactor this. Using the c_type here feels like a mess.
-// In general, I think I need to refactor how constants are handled.
-// It's also unfortunate that I'm passing the size around everywhere.
-static x64_Operand* imm(uint64_t val, CType c_type) {
+static x64_Operand* imm(uint64_t val, bool sign) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
-  ret->size = type_to_size(c_type);
-  ret->sign = type_is_signed(c_type);
+  ret->sign = sign;
   return ret;
 }
 
-static inline x64_Operand* reg(x64_RegType ty, x64_Size size) {
+static inline x64_Operand* reg(x64_RegType ty) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_REG;
   ret->reg = ty;
-  ret->size = size;
   return ret;
 }
 
-static x64_Operand* stack(int val, x64_Size size) {
+static x64_Operand* stack(int val) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_STACK;
   ret->stack = val;
-  ret->size = size;
   return ret;
 }
 
-static x64_Operand* data(String* ident, x64_Size size) {
+static x64_Operand* data(String* ident) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_DATA;
   ret->ident = ident;
-  ret->size = size;
   return ret;
 }
 
@@ -159,8 +151,7 @@ static x64_Operand* pseudo(Context* cx, String* name) {
 
   // Emit data operands for static variables.
   if (st_entry->ty == ST_STATIC_VAR) {
-    x64_Size size = type_to_size(st_entry->static_.c_type);
-    return data(name, size);
+    return data(name);
   }
 
   x64_Size size = type_to_size(st_entry->local.c_type);
@@ -175,7 +166,7 @@ static x64_Operand* pseudo(Context* cx, String* name) {
   assert(cx->stack_pos % bytes == 0);
 
   // allocate a new stack operand if one doesn't exist
-  stack_operand = stack(cx->stack_pos * -1, size);
+  stack_operand = stack(cx->stack_pos * -1);
   hashmap_put(cx->stack_map, name, stack_operand);
   return stack_operand;
 }
@@ -184,7 +175,6 @@ static x64_Operand* label_op(String* label) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_LABEL;
   ret->ident = label;
-  ret->size = 0;
   return ret;
 }
 
@@ -201,7 +191,6 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
       panic("Unexpected IrVal type %lu", ir->ty);
   }
 
-  ret->size = ir_val_to_size(cx, ir);
   return ret;
 }
 
@@ -211,13 +200,6 @@ static inline bool op_is_stack_or_data(x64_Operand* op) {
 
 //
 // x64 instruction helpers
-// TODO(johntan): If I want to remove the other passes, I might need to change
-// the API of all the instruction generation functions. It might be better to
-// have all of them take the |out| instruction vector directly, so that these
-// functions can insert e.g. additional moves or whatever.
-//
-// Or instead, just make the |out| instruction vector a global that these
-// functions push to directly.
 //
 
 static inline void push_instr(Context* cx, x64_Instruction instr) {
@@ -267,7 +249,7 @@ static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
                        r1->imm > (uint64_t)INT_MAX;
   if (is_mem_to_mem || imm_too_large) {
     // insert intermediate move to r10
-    x64_Operand* r10 = reg(REG_R10, size);
+    x64_Operand* r10 = reg(REG_R10);
     instr2(cx, X64_MOV, r1, r10, size);
     instr2(cx, X64_MOV, r10, r2, size);
   } else {
@@ -278,7 +260,7 @@ static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
 static inline void push(Context* cx, x64_Operand* arg, x64_Size size) {
   if (arg->ty == X64_OP_IMM && arg->imm > INT_MAX) {
     // insert intermediate move to r10
-    x64_Operand* r10 = reg(REG_R10, size);
+    x64_Operand* r10 = reg(REG_R10);
     instr2(cx, X64_MOV, arg, r10, size);
     instr1(cx, X64_PUSH, r10, size);
   } else {
@@ -332,7 +314,7 @@ static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
     case X64_SUB: {
       bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
       if (is_mem_to_mem || imm_bigger_than_int(r1)) {
-        x64_Operand* r10 = reg(REG_R10, size);
+        x64_Operand* r10 = reg(REG_R10);
         instr2(cx, X64_MOV, r1, r10, size);
         instr2(cx, ty, r10, r2, size);
       } else {
@@ -342,14 +324,14 @@ static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
     }
     case X64_MUL: {
       if (imm_bigger_than_int(r1)) {
-        x64_Operand* r10 = reg(REG_R10, size);
+        x64_Operand* r10 = reg(REG_R10);
         instr2(cx, X64_MOV, r1, r10, size);
         r1 = r10;
       }
 
       if (op_is_stack_or_data(r2)) {
         // mul can't use a stack location as its r2
-        x64_Operand* r11 = reg(REG_R11, size);
+        x64_Operand* r11 = reg(REG_R11);
         instr2(cx, X64_MOV, r2, r11, size);
         instr2(cx, X64_MUL, r1, r11, size);
         instr2(cx, X64_MOV, r11, r2, size);
@@ -377,7 +359,7 @@ static void cmp(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size size) {
   // }
   if (requires_move_to_r10) {
     // insert intermediate move from r2 to r10
-    x64_Operand* r10 = reg(REG_R10, size);
+    x64_Operand* r10 = reg(REG_R10);
     instr2(cx, X64_MOV, r1, r10, size);
     r1 = r10;
   }
@@ -385,7 +367,7 @@ static void cmp(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size size) {
   if (r2->ty == X64_OP_IMM) {
     // cmp can't have an imm as its r2, move r2 to r11 and use r11 as the
     // argument.
-    x64_Operand* r11 = reg(REG_R11, size);
+    x64_Operand* r11 = reg(REG_R11);
     mov(cx, r2, r11, size);
     r2 = r11;
   }
@@ -422,11 +404,11 @@ static void divide(Context* cx, IrInstruction* ir) {
   x64_Operand* r2 = to_x64_op(cx, ir->r2);
   const bool is_signed = type_is_signed(c_type);
 
-  mov(cx, r1, reg(REG_AX, size), size);
+  mov(cx, r1, reg(REG_AX), size);
   if (is_signed) {
     instr0(cx, X64_CDQ, size);
   } else {
-    mov(cx, imm(0, c_type), reg(REG_DX, size), size);
+    mov(cx, imm(0, c_type), reg(REG_DX), size);
   }
 
   x64_InstructionType div_instr = is_signed ? X64_IDIV : X64_DIV;
@@ -434,7 +416,7 @@ static void divide(Context* cx, IrInstruction* ir) {
   if (r2->ty == X64_OP_IMM) {
     // idiv isn't allowed with immediate args
     // instead, move the arg into a register then idiv on that
-    x64_Operand* r10 = reg(REG_R10, size);
+    x64_Operand* r10 = reg(REG_R10);
     mov(cx, r2, r10, size);
     instr1(cx, div_instr, r10, size);
   } else {
@@ -445,13 +427,13 @@ static void divide(Context* cx, IrInstruction* ir) {
 static void movsx(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Size from,
                   x64_Size to) {
   if (r1->ty == X64_OP_IMM) {
-    x64_Operand* r10 = reg(REG_R10, from);
+    x64_Operand* r10 = reg(REG_R10);
     instr2(cx, X64_MOV, r1, r10, from);
     r1 = r10;
   }
 
   if (op_is_stack_or_data(r2)) {
-    x64_Operand* r11 = reg(REG_R11, to);
+    x64_Operand* r11 = reg(REG_R11);
     instr2(cx, X64_MOVSX, r1, r11, to);
     instr2(cx, X64_MOV, r11, r2, to);
   } else {
@@ -487,18 +469,17 @@ static x64_Function* convert_function(IrFunction* ir_function,
 
   size_t n = 0;
   vec_for_each(ir_function->params, String, param) {
-    x64_Size param_size = symbol_to_size(&cx, iter.param);
-
     x64_Operand* arg = NULL;
     if (n < kNumArgumentRegs) {
-      arg = reg(kArgumentRegs[n], param_size);
+      arg = reg(kArgumentRegs[n]);
     } else {
       // arguments are always passed as 8 bytes on the stack.
       int stack_offset = (8 * (n - kNumArgumentRegs)) + 16;
-      arg = stack(stack_offset, param_size);
+      arg = stack(stack_offset);
     }
     n++;
 
+    x64_Size param_size = symbol_to_size(&cx, iter.param);
     mov(&cx, arg, pseudo(&cx, iter.param), param_size);
     // TODO: correct sizing.
     // Note: this size corresponds to the pseudoreg that the argument is moved
@@ -514,7 +495,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
       case IR_RET: {
         // mov $val, %rax
         x64_Size size = ir_val_to_size(&cx, ir->r1);
-        mov(&cx, to_x64_op(&cx, ir->r1), reg(REG_AX, size), size);
+        mov(&cx, to_x64_op(&cx, ir->r1), reg(REG_AX), size);
 
         // size for RET should be ignored.
         instr0(&cx, X64_RET, QUADWORD);
@@ -596,7 +577,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
         divide(&cx, ir);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Size size = asm_size_of(&cx, ir);
-        mov(&cx, reg(REG_AX, size), dst, size);
+        mov(&cx, reg(REG_AX), dst, size);
         break;
       }
       case IR_REM: {
@@ -604,7 +585,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
         divide(&cx, ir);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Size size = asm_size_of(&cx, ir);
-        mov(&cx, reg(REG_DX, size), dst, size);
+        mov(&cx, reg(REG_DX), dst, size);
         break;
       }
       case IR_JMP: {
@@ -666,8 +647,8 @@ static x64_Function* convert_function(IrFunction* ir_function,
           // Note that each R11 has different sizes here.
           // TODO: I bet I can remove the sizes from each individual register
           // and rely on the instruction size instead.
-          mov(&cx, src, reg(REG_R11, size), size);
-          mov(&cx, reg(REG_R11, dst_size), dst, dst_size);
+          mov(&cx, src, reg(REG_R11), size);
+          mov(&cx, reg(REG_R11), dst, dst_size);
         }
         break;
       }
@@ -676,8 +657,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
         // adjust stack if we have an odd number of arguments.
         // The x64 stack must be 16 byte aligned.
         if (ir->args->len > kNumArgumentRegs && (ir->args->len % 2)) {
-          instr2(&cx, X64_SUB, imm(8, TYPE_ULONG), reg(REG_SP, QUADWORD),
-                 QUADWORD);
+          instr2(&cx, X64_SUB, imm(8, TYPE_ULONG), reg(REG_SP), QUADWORD);
           stack_to_dealloc += 8;
         }
 
@@ -686,7 +666,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
           IrVal* val = vec_get(ir->args, i);
           x64_Size size = ir_val_to_size(&cx, val);
           x64_Operand* arg = to_x64_op(&cx, val);
-          x64_Operand* x64_reg = reg(kArgumentRegs[i], size);
+          x64_Operand* x64_reg = reg(kArgumentRegs[i]);
           mov(&cx, arg, x64_reg, size);
         }
 
@@ -703,7 +683,7 @@ static x64_Function* convert_function(IrFunction* ir_function,
                 size == QUADWORD) {
               push(&cx, arg, size);
             } else {
-              x64_Operand* rax = reg(REG_AX, arg->size);
+              x64_Operand* rax = reg(REG_AX);
               mov(&cx, arg, rax, size);
               push(&cx, rax, size);
             }
@@ -722,14 +702,14 @@ static x64_Function* convert_function(IrFunction* ir_function,
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          instr2(&cx, X64_ADD, imm(stack_to_dealloc, TYPE_ULONG),
-                 reg(REG_SP, QUADWORD), QUADWORD);
+          instr2(&cx, X64_ADD, imm(stack_to_dealloc, false), reg(REG_SP),
+                 QUADWORD);
         }
 
         // Move the return value in RAX to the call's destination.
         x64_Size size = ir_val_to_size(&cx, ir->dst);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
-        mov(&cx, reg(REG_AX, size), dst, size);
+        mov(&cx, reg(REG_AX), dst, size);
         break;
       }
       default:
@@ -749,8 +729,8 @@ static x64_Function* convert_function(IrFunction* ir_function,
   x64_Instruction* alloc_stack = vec_get(ret->instructions, 0);
   *alloc_stack = (x64_Instruction){
       .ty = X64_SUB,
-      .r1 = imm(ret->stack_size, TYPE_ULONG),
-      .r2 = reg(REG_SP, QUADWORD),
+      .r1 = imm(ret->stack_size, false),
+      .r2 = reg(REG_SP),
       .size = QUADWORD,
   };
 

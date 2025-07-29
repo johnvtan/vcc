@@ -31,29 +31,21 @@ static void emit(Context* cx, const char* fmt, ...) {
   va_end(args);
 }
 
-static void emit_operand(Context* cx, const x64_Operand* op) {
+static void emit_operand(Context* cx, const x64_Operand* op, x64_Size size) {
   switch (op->ty) {
     case X64_OP_IMM: {
+      // By this point, we should have the correct value in op->imm, including
+      // all necessary conversions. So just format it based on the sign.
       if (op->sign) {
-        emit(cx, "$%ld", op->imm);
+        emit(cx, "$%ld", (int64_t)op->imm);
       } else {
         emit(cx, "$%lu", op->imm);
       }
-      // switch (op->size) {
-      //   case QUADWORD:
-      //     emit(cx, "$%ld", (long)op->imm);
-      //     break;
-      //   case LONGWORD:
-      //     emit(cx, "$%d", (int)op->imm);
-      //     break;
-      //   default:
-      //     assert(false);
-      // }
       break;
     }
     case X64_OP_REG: {
       const char* reg_str = NULL;
-      if (op->size == QUADWORD) {
+      if (size == QUADWORD) {
         static const char* reg_map[] = {
             [REG_AX] = "rax", [REG_DX] = "rdx",  [REG_DI] = "rdi",
             [REG_CX] = "rcx", [REG_SI] = "rsi",  [REG_R8] = "r8",
@@ -61,7 +53,7 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
             [REG_SP] = "rsp",
         };
         reg_str = reg_map[op->reg];
-      } else if (op->size == LONGWORD) {
+      } else if (size == LONGWORD) {
         static const char* reg_map[] = {
             [REG_AX] = "eax", [REG_DX] = "edx",   [REG_DI] = "edi",
             [REG_CX] = "ecx", [REG_SI] = "esi",   [REG_R8] = "r8d",
@@ -70,7 +62,7 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
         };
         reg_str = reg_map[op->reg];
       } else {
-        panic("Unexpected reg op size %u", op->size);
+        panic("Unexpected reg op size %u", size);
       }
       emit(cx, "%%%s", reg_str);
       break;
@@ -95,22 +87,24 @@ static void emit_operand(Context* cx, const x64_Operand* op) {
 static void emit2(Context* cx, const char* inst, const x64_Operand* src,
                   const x64_Operand* dst, const x64_Size size) {
   emit(cx, "\t%s%c ", inst, size);
-  emit_operand(cx, src);
+  emit_operand(cx, src, size);
   emit(cx, ", ");
-  emit_operand(cx, dst);
+  emit_operand(cx, dst, size);
   emit(cx, "\n");
 }
 
 static void emit1(Context* cx, const char* inst, const x64_Operand* arg,
                   const x64_Size size) {
   emit(cx, "\t%s%c ", inst, size);
-  emit_operand(cx, arg);
+  emit_operand(cx, arg, size);
   emit(cx, "\n");
 }
 
 static void emit_jump(Context* cx, const char* inst, const x64_Operand* arg) {
   emit(cx, "\t%s ", inst);
-  emit_operand(cx, arg);
+
+  // size argument not used for jumps
+  emit_operand(cx, arg, LONGWORD);
   emit(cx, "\n");
 }
 
@@ -220,19 +214,15 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
     }
     case X64_PUSH: {
       // TODO(johntan): cleanup? Just hardcoding QUADWORD rn.
-      inst->r1->size = QUADWORD;
       emit1(cx, "push", inst->r1, QUADWORD);
       break;
     }
     case X64_MOVSX: {
-      assert(inst->r1->size);
-      assert(inst->r2->size);
-
-      // TODO(johntan): refactor
+      // I think movslq is always long -> quad?
       emit(cx, "\tmovslq ");
-      emit_operand(cx, inst->r1);
+      emit_operand(cx, inst->r1, LONGWORD);
       emit(cx, ", ");
-      emit_operand(cx, inst->r2);
+      emit_operand(cx, inst->r2, QUADWORD);
       emit(cx, "\n");
       break;
     }

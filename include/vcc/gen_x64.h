@@ -49,8 +49,6 @@ typedef struct {
 
   // X64_OP_LABEL or X64_OP_DATA
   String* ident;
-
-  x64_Size size;
 } x64_Operand;
 
 typedef enum {
