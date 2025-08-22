@@ -8,11 +8,25 @@ TESTDIR := unit
 OBJDIR := obj
 BINDIR := bin
 
-SRCS := $(wildcard *.c)
+COMPILER_SRCS := ast.c \
+			  emit_x64.c \
+				errors.c \
+				file_pos.c \
+				gen_x64.c \
+				hashmap.c \
+				ir.c \
+				lex.c \
+				string.c \
+				typecheck.c \
+				vec.c
+
+COMPILER_OBJS := $(patsubst %.c, $(OBJDIR)/%.o, $(COMPILER_SRCS))
+
+SRCS := $(COMPILER_SRCS) main.c
+OBJS := $(COMPILER_OBJS) $(OBJDIR)/main.o
+
 TESTSRCS := $(wildcard $(TESTDIR)/*_test.c)
 TESTS ?= $(patsubst $(TESTDIR)/%_test.c, %_test, $(TESTSRCS))
-
-OBJS := $(patsubst %.c, $(OBJDIR)/%.o, $(SRCS))
 
 TESTBINS := $(patsubst %, $(BINDIR)/%, $(TESTS))
 
@@ -36,14 +50,9 @@ $(BINDIR)/$(TARGET): $(OBJS)
 	./$<
 	@echo "====================================\n"
 
-$(BINDIR)/%_test: $(TESTDIR)/%_test.c %.c
-	$(CC) $(CFLAGS) -I $(INCDIR) $^ -o $@
-
-$(BINDIR)/string_test: $(TESTDIR)/string_test.c string.c vec.c
-	$(CC) $(CFLAGS) -I $(INCDIR) $^ -o $@
-
-$(BINDIR)/hashmap_test: $(TESTDIR)/hashmap_test.c string.c vec.c hashmap.c
-	$(CC) $(CFLAGS) -I $(INCDIR) $^ -o $@
+$(BINDIR)/%_test: $(TESTDIR)/%_test.c $(COMPILER_OBJS)
+	$(CC) $(CFLAGS) -I $(INCDIR) -c $< -o $(OBJDIR)/$*_test.o
+	$(LD) $(LDFLAGS) $(COMPILER_OBJS) $(OBJDIR)/$*_test.o -o $@
 
 $(OBJDIR)/%.o: %.c
 	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
