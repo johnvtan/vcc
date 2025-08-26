@@ -14,56 +14,23 @@ typedef struct {
 } KeywordMatch;
 
 static KeywordMatch KEYWORD_MATCHES[] = {
-    {TK_INT, "int"},
-    {TK_LONG, "long"},
-    {TK_UNSIGNED, "unsigned"},
-    {TK_SIGNED, "signed"},
-    {TK_VOID, "void"},
-    {TK_RETURN, "return"},
-    {TK_OPEN_PAREN, "("},
-    {TK_CLOSE_PAREN, ")"},
-    {TK_OPEN_BRACE, "{"},
-    {TK_CLOSE_BRACE, "}"},
-    {TK_SEMICOLON, ";"},
-    {TK_TILDE, "~"},
-    {TK_DASH, "-"},
-    {TK_DASHDASH, "--"},
-    {TK_PLUS, "+"},
-    {TK_PLUSPLUS, "++"},
-    {TK_STAR, "*"},
-    {TK_SLASH, "/"},
-    {TK_PERCENT, "%"},
-    {TK_BANG, "!"},
-    {TK_AMPAMP, "&&"},
-    {TK_PIPEPIPE, "||"},
-    {TK_EQEQ, "=="},
-    {TK_BANGEQ, "!="},
-    {TK_LT, "<"},
-    {TK_GT, ">"},
-    {TK_LTEQ, "<="},
-    {TK_GTEQ, ">="},
-    {TK_EQ, "="},
-    {TK_PLUSEQ, "+="},
-    {TK_DASHEQ, "-="},
-    {TK_STAREQ, "*="},
-    {TK_SLASHEQ, "/="},
-    {TK_PERCENTEQ, "%="},
-    {TK_IF, "if"},
-    {TK_ELSE, "else"},
-    {TK_QUESTION, "?"},
-    {TK_COLON, ":"},
-    {TK_GOTO, "goto"},
-    {TK_DO, "do"},
-    {TK_WHILE, "while"},
-    {TK_FOR, "for"},
-    {TK_BREAK, "break"},
-    {TK_CONTINUE, "continue"},
-    {TK_SWITCH, "switch"},
-    {TK_CASE, "case"},
-    {TK_DEFAULT, "default"},
-    {TK_COMMA, ","},
-    {TK_STATIC, "static"},
-    {TK_EXTERN, "extern"},
+    {TK_INT, "int"},       {TK_LONG, "long"},     {TK_UNSIGNED, "unsigned"},
+    {TK_SIGNED, "signed"}, {TK_DOUBLE, "double"}, {TK_VOID, "void"},
+    {TK_RETURN, "return"}, {TK_OPEN_PAREN, "("},  {TK_CLOSE_PAREN, ")"},
+    {TK_OPEN_BRACE, "{"},  {TK_CLOSE_BRACE, "}"}, {TK_SEMICOLON, ";"},
+    {TK_TILDE, "~"},       {TK_DASH, "-"},        {TK_DASHDASH, "--"},
+    {TK_PLUS, "+"},        {TK_PLUSPLUS, "++"},   {TK_STAR, "*"},
+    {TK_SLASH, "/"},       {TK_PERCENT, "%"},     {TK_BANG, "!"},
+    {TK_AMPAMP, "&&"},     {TK_PIPEPIPE, "||"},   {TK_EQEQ, "=="},
+    {TK_BANGEQ, "!="},     {TK_LT, "<"},          {TK_GT, ">"},
+    {TK_LTEQ, "<="},       {TK_GTEQ, ">="},       {TK_EQ, "="},
+    {TK_PLUSEQ, "+="},     {TK_DASHEQ, "-="},     {TK_STAREQ, "*="},
+    {TK_SLASHEQ, "/="},    {TK_PERCENTEQ, "%="},  {TK_IF, "if"},
+    {TK_ELSE, "else"},     {TK_QUESTION, "?"},    {TK_COLON, ":"},
+    {TK_GOTO, "goto"},     {TK_DO, "do"},         {TK_WHILE, "while"},
+    {TK_FOR, "for"},       {TK_BREAK, "break"},   {TK_CONTINUE, "continue"},
+    {TK_SWITCH, "switch"}, {TK_CASE, "case"},     {TK_DEFAULT, "default"},
+    {TK_COMMA, ","},       {TK_STATIC, "static"}, {TK_EXTERN, "extern"},
 };
 
 #define NUM_KEYWORDS (sizeof(KEYWORD_MATCHES) / sizeof(KEYWORD_MATCHES[0]))
@@ -182,7 +149,7 @@ static bool match_ident(const FilePos* pos, Token* out_token) {
   }
 
   size_t n = 0;
-  while (!file_pos_is_eof(pos) &&
+  while (!file_pos_is_eof_at(pos, n) &&
          is_ident_char(file_pos_peek_char_at(pos, n))) {
     n++;
   }
@@ -198,51 +165,97 @@ static bool match_ident(const FilePos* pos, Token* out_token) {
   return true;
 }
 
-static bool match_num_constant(const FilePos* pos, Token* out_token) {
-  // Advance until no longer a number.
-  size_t n = 0;
-  while (!file_pos_is_eof(pos) && is_num(file_pos_peek_char_at(pos, n))) {
+static size_t match_digits(const FilePos* pos, size_t n) {
+  while (!file_pos_is_eof_at(pos, n) && is_num(file_pos_peek_char_at(pos, n))) {
     n++;
   }
 
-  if (!n) {
-    return false;
-  }
+  return n;
+}
 
-  // Determine the out token type based on the suffx.
-  // An integral suffix (for now) is only one character. Eventually, we'll need
-  // to handle suffixes with multiple characters, like UL.
+static bool match_num_constant(const FilePos* pos, Token* out_token) {
   TokenType out_ty = TK_INT_CONST;
 
-  String* suffix = string_new();
-  char next_char;
-  while ((next_char = tolower(file_pos_peek_char_at(pos, n)))) {
-    if (next_char == 'l' || next_char == 'u') {
-      string_append(suffix, next_char);
+  size_t n = match_digits(pos, 0);
+  if (n == 0) {
+    return false;
+  }
+
+  if (!file_pos_is_eof_at(pos, n)) {
+    if (file_pos_peek_char_at(pos, n) == '.') {
+      out_ty = TK_DOUBLE_CONST;
+
+      // consume the period
       n++;
-      continue;
+      // consume the fractional part of the double.
+      // It's possible there are no digits after the period.
+      n = match_digits(pos, n);
     }
-    break;
   }
 
-  if (string_len(suffix) == 0) {
-    out_ty = TK_INT_CONST;
-  } else if (string_eq2(suffix, "l")) {
-    out_ty = TK_LONG_CONST;
-  } else if (string_eq2(suffix, "u")) {
-    out_ty = TK_UINT_CONST;
-  } else if (string_eq2(suffix, "lu") || string_eq2(suffix, "ul")) {
-    out_ty = TK_ULONG_CONST;
-  } else {
-    emit_error(pos, "Invalid numeric literal suffix");
-    return false;
+  if (!file_pos_is_eof_at(pos, n)) {
+    // parse exponent
+    if (file_pos_peek_char_at(pos, n) == 'e' ||
+        file_pos_peek_char_at(pos, n) == 'E') {
+      out_ty = TK_DOUBLE_CONST;
+
+      // Consume the e/E.
+      n++;
+      char c = file_pos_peek_char_at(pos, n);
+      if (c == '+' || c == '-') {
+        // exponents can be positive or negative
+        n++;
+        c = file_pos_peek_char_at(pos, n);
+      }
+
+      size_t new_n = match_digits(pos, n);
+      if (new_n == n) {
+        // exponent must have digits
+        emit_error(pos, "No digits following exponent");
+        return false;
+      }
+      n = new_n;
+    }
   }
 
-  // TODO: we have to check that the number ends at a word boundary.
-  // Currently we check this by looking at the next character and seeing if it's
-  // part of some malformed ident, but is this the right way to check?
-  if (is_ident_char(next_char)) {
-    return false;
+  if (!file_pos_is_eof_at(pos, n)) {
+    // Now parse the suffix. This should
+    String* suffix = string_new();
+    char next_char;
+    while ((next_char = tolower(file_pos_peek_char_at(pos, n)))) {
+      if (next_char == 'l' || next_char == 'u') {
+        string_append(suffix, next_char);
+        n++;
+        continue;
+      }
+      break;
+    }
+
+    if (out_ty == TK_INT_CONST) {
+      if (string_len(suffix) == 0) {
+        out_ty = TK_INT_CONST;
+      } else if (string_eq2(suffix, "l")) {
+        out_ty = TK_LONG_CONST;
+      } else if (string_eq2(suffix, "u")) {
+        out_ty = TK_UINT_CONST;
+      } else if (string_eq2(suffix, "lu") || string_eq2(suffix, "ul")) {
+        out_ty = TK_ULONG_CONST;
+      } else {
+        emit_error(pos, "Invalid numeric literal suffix for integer");
+        return false;
+      }
+    } else {
+      // handle double suffix, for now empty.
+      emit_error(pos, "Invalid numeric literal suffix for double");
+      return false;
+    }
+
+    // TODO: we have to check that the number ends at a word boundary.
+    // Currently we check this by looking at the next character and seeing if
+    // it's part of some malformed ident, but is this the right way to check?
+    if (next_char == '.' || is_ident_char(next_char)) {
+      return false;
+    }
   }
 
   out_token->ty = out_ty;

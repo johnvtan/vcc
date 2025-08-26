@@ -1,8 +1,10 @@
 #include <assert.h>
 #include <vcc/file_pos.h>
 
-bool file_pos_is_eof(const FilePos* pos) {
-  return pos->idx >= string_len(pos->contents);
+bool file_pos_is_eof(const FilePos* pos) { return file_pos_is_eof_at(pos, 0); }
+
+bool file_pos_is_eof_at(const FilePos* pos, size_t n) {
+  return (pos->idx + n) >= string_len(pos->contents);
 }
 
 String* file_pos_current_line(const FilePos* pos) {
@@ -23,7 +25,7 @@ size_t file_pos_remaining(const FilePos* pos) {
 }
 
 char file_pos_peek_char_at(const FilePos* pos, size_t n) {
-  assert(!file_pos_is_eof(pos));
+  assert(!file_pos_is_eof_at(pos, n));
   return string_get(pos->contents, pos->idx + n);
 }
 

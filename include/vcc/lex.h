@@ -12,6 +12,7 @@ typedef enum {
   TK_LONG,
   TK_UNSIGNED,
   TK_SIGNED,
+  TK_DOUBLE,
   TK_VOID,
   TK_RETURN,
   TK_OPEN_PAREN,
@@ -63,6 +64,7 @@ typedef enum {
   TK_LONG_CONST,
   TK_UINT_CONST,
   TK_ULONG_CONST,
+  TK_DOUBLE_CONST,
 } TokenType;
 
 typedef struct {

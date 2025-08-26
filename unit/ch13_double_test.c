@@ -11,19 +11,66 @@ void lex_test(void) {
     assert(tokens);
     assert(tokens->len == 1);
 
-    Token* double_tk = vec_get(tokens, 0);
-    assert(double_tk->ty != TK_IDENT);
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE);
   }
 
   {
     Vec* tokens = lex(string_from("3.0"));
     assert(tokens);
+    assert(tokens->len == 1);
+
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE_CONST);
+    assert(string_eq2(tk->content, "3.0"));
   }
 
   {
-    Vec* tokens = lex(string_from("-3.0234"));
+    Vec* tokens = lex(string_from("3.0234"));
     assert(tokens);
+
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE_CONST);
+    assert(string_eq2(tk->content, "3.0234"));
   }
+
+  {
+    Vec* tokens = lex(string_from("3e2"));
+    assert(tokens);
+
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE_CONST);
+    assert(string_eq2(tk->content, "3e2"));
+  }
+
+  {
+    Vec* tokens = lex(string_from("3.e2"));
+    assert(tokens);
+
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE_CONST);
+    assert(string_eq2(tk->content, "3.e2"));
+  }
+
+  {
+    Vec* tokens = lex(string_from("3.1e-2"));
+    assert(tokens);
+
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE_CONST);
+    assert(string_eq2(tk->content, "3.1e-2"));
+  }
+
+  {
+    Vec* tokens = lex(string_from("8.1e+2"));
+    assert(tokens);
+
+    Token* tk = vec_get(tokens, 0);
+    assert(tk->ty == TK_DOUBLE_CONST);
+    assert(string_eq2(tk->content, "8.1e+2"));
+  }
+
+
 }
 
 int main(void) {
