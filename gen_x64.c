@@ -182,7 +182,7 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
   x64_Operand* ret = NULL;
   switch (ir->ty) {
     case IR_VAL_CONST:
-      ret = imm(ir->constant.storage_, ir->constant.c_type);
+      ret = imm(ir->constant.int_storage_, ir->constant.c_type);
       break;
     case IR_VAL_VAR:
       ret = pseudo(cx, ir->var);

@@ -158,6 +158,7 @@ static bool is_type_specifier(TokenType t) {
     case TK_INT:
     case TK_SIGNED:
     case TK_UNSIGNED:
+    case TK_DOUBLE:
       return true;
     default:
       return false;
@@ -191,6 +192,7 @@ static CType specs_to_ctype(Vec* specs) {
   size_t long_counts = 0;
   size_t signed_counts = 0;
   size_t unsigned_counts = 0;
+  size_t double_counts = 0;
 
   vec_for_each(specs, TokenType, ty) {
     switch (*iter.ty) {
@@ -206,8 +208,21 @@ static CType specs_to_ctype(Vec* specs) {
       case TK_UNSIGNED:
         unsigned_counts++;
         break;
+      case TK_DOUBLE:
+        double_counts++;
+        break;
       default:
         assert(false);
+    }
+  }
+
+  if (double_counts) {
+    // double must be the only specifier in the list.
+    if (double_counts == 1 && specs->len == 1) {
+      return TYPE_DOUBLE;
+    } else {
+      panic("Double found in specifier list with multiple specifiers: %u",
+            double_counts);
     }
   }
 
@@ -359,7 +374,9 @@ static AstExpr* parse_primary(ParseContext* cx) {
       match(cx, TK_UINT_CONST) || match(cx, TK_ULONG_CONST)) {
     Token t = consume(cx);
     const bool is_signed = t.ty == TK_INT_CONST || t.ty == TK_LONG_CONST;
-    const uint64_t parsed = strtoul(cstring(t.content), NULL, 10);
+
+    char* endptr = NULL;
+    const uint64_t parsed = strtoul(cstring(t.content), &endptr, 10);
     CType c_type = TYPE_NONE;
 
     if (is_signed) {
@@ -375,8 +392,12 @@ static AstExpr* parse_primary(ParseContext* cx) {
         c_type = TYPE_LONG;
       }
     } else {
-      if (parsed == ULONG_MAX && errno == ERANGE) {
-        panic("Parsed unsigned integer constant too large", 1);
+      if (endptr == cstring(t.content) && parsed == ULONG_MAX &&
+          errno == ERANGE) {
+        panic(
+            "Parsed unsigned integer constant too large: %s, ulong=%lu, "
+            "errno=%lu",
+            cstring(t.content), ULONG_MAX, errno);
       }
 
       if (parsed <= UINT_MAX && t.ty == TK_UINT_CONST) {
@@ -387,9 +408,30 @@ static AstExpr* parse_primary(ParseContext* cx) {
     }
 
     AstExpr* constant = expr(EXPR_CONST);
-    constant->const_.storage_ = parsed;
+    constant->const_.int_storage_ = parsed;
     constant->c_type = c_type;
     constant->const_.c_type = c_type;
+    return constant;
+  }
+
+  if (match(cx, TK_DOUBLE_CONST)) {
+    Token t = consume(cx);
+
+    char* endptr = NULL;
+    double d = strtod(cstring(t.content), &endptr);
+    if (endptr == cstring(t.content)) {
+      panic("Could not parse double: %s errno=%u d=%lf", cstring(t.content),
+            errno, d);
+    }
+
+    // Note: errno could be non-zero but we still parsed a double (e.g. for
+    // inexact conversion) reset errno here
+    errno = 0;
+
+    AstExpr* constant = expr(EXPR_CONST);
+    constant->const_.double_storage_ = d;
+    constant->c_type = TYPE_DOUBLE;
+    constant->const_.c_type = TYPE_DOUBLE;
     return constant;
   }
 

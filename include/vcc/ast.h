@@ -18,12 +18,16 @@ typedef enum CType {
   TYPE_LONG,
   TYPE_UINT,
   TYPE_ULONG,
+  TYPE_DOUBLE,
 } CType;
 
 // Container for a compile time constant.
 typedef struct {
   CType c_type;
-  uint64_t storage_;
+  union {
+    uint64_t int_storage_;
+    double double_storage_;
+  };
 } CompTimeConst;
 
 //

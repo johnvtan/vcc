@@ -103,7 +103,7 @@ static CompTimeConst convert_comptime_const_to(CompTimeConst c,
 
   CompTimeConst ret = {
       .c_type = target_type,
-      .storage_ = cast_underlying_storage(c.storage_, target_type)};
+      .int_storage_ = cast_underlying_storage(c.int_storage_, target_type)};
   return ret;
 }
 
@@ -121,7 +121,7 @@ static StaticInit to_static_init(AstExpr* e) {
   StaticInit ret = {
       .ty = INIT_HAS_VALUE,
       .c_type = e->c_type,
-      .storage_ = e->const_.storage_,
+      .storage_ = e->const_.int_storage_,
   };
   return ret;
 }
@@ -485,13 +485,13 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
 static String* comptime_const_to_string(CompTimeConst c) {
   switch (c.c_type) {
     case TYPE_INT:
-      return string_format("%d", c.storage_);
+      return string_format("%d", c.int_storage_);
     case TYPE_LONG:
-      return string_format("%ldL", c.storage_);
+      return string_format("%ldL", c.int_storage_);
     case TYPE_UINT:
-      return string_format("%uU", c.storage_);
+      return string_format("%uU", c.int_storage_);
     case TYPE_ULONG:
-      return string_format("%uUL", c.storage_);
+      return string_format("%uUL", c.int_storage_);
     default:
       assert(false);
   }

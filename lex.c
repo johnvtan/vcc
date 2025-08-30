@@ -173,9 +173,58 @@ static size_t match_digits(const FilePos* pos, size_t n) {
   return n;
 }
 
-static bool match_num_constant(const FilePos* pos, Token* out_token) {
-  TokenType out_ty = TK_INT_CONST;
+static bool match_int_constant(const FilePos* pos, Token* out_token) {
+  size_t n = match_digits(pos, 0);
+  if (!n) {
+    return false;
+  }
 
+  TokenType out_ty = TK_INT_CONST;
+  if (!file_pos_is_eof_at(pos, n)) {
+    // Now parse the suffix. This should
+    String* suffix = string_new();
+    char next_char;
+    while (!file_pos_is_eof_at(pos, n) &&
+           (next_char = tolower(file_pos_peek_char_at(pos, n)))) {
+      if (next_char == 'l' || next_char == 'u') {
+        string_append(suffix, next_char);
+        n++;
+        continue;
+      }
+
+      break;
+    }
+
+    if (string_len(suffix) == 0) {
+      out_ty = TK_INT_CONST;
+    } else if (string_eq2(suffix, "l")) {
+      out_ty = TK_LONG_CONST;
+    } else if (string_eq2(suffix, "u")) {
+      out_ty = TK_UINT_CONST;
+    } else if (string_eq2(suffix, "lu") || string_eq2(suffix, "ul")) {
+      out_ty = TK_ULONG_CONST;
+    } else {
+      emit_error(pos, "Invalid numeric literal suffix for integer");
+      return false;
+    }
+
+    // TODO: we have to check that the number ends at a word boundary.
+    // Currently we check this by looking at the next character and seeing if
+    // it's part of some malformed ident, but is this the right way to check?
+    if (next_char == '.' || is_ident_char(next_char)) {
+      return false;
+    }
+  }
+
+  out_token->ty = out_ty;
+  out_token->pos = *pos;
+
+  // Note: content will contain the suffix if it exists.
+  out_token->content = string_substring(pos->contents, pos->idx, n);
+  return true;
+}
+
+static bool match_double_constant(const FilePos* pos, Token* out_token) {
   size_t n = match_digits(pos, 0);
   const bool leading_digits = n != 0;
   bool has_fractional = false;
@@ -187,8 +236,6 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
 
   if (!file_pos_is_eof_at(pos, n)) {
     if (file_pos_peek_char_at(pos, n) == '.') {
-      out_ty = TK_DOUBLE_CONST;
-
       // consume the period
       n++;
       // consume the fractional part of the double.
@@ -208,8 +255,6 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
     // parse exponent
     if (file_pos_peek_char_at(pos, n) == 'e' ||
         file_pos_peek_char_at(pos, n) == 'E') {
-      out_ty = TK_DOUBLE_CONST;
-
       // Consume the e/E.
       n++;
       char c = file_pos_peek_char_at(pos, n);
@@ -230,39 +275,7 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
   }
 
   if (!file_pos_is_eof_at(pos, n)) {
-    // Now parse the suffix. This should
-    String* suffix = string_new();
-    char next_char;
-    while (!file_pos_is_eof_at(pos, n) &&
-           (next_char = tolower(file_pos_peek_char_at(pos, n)))) {
-      if (next_char == 'l' || next_char == 'u') {
-        string_append(suffix, next_char);
-        n++;
-        continue;
-      }
-
-      break;
-    }
-
-    if (out_ty == TK_INT_CONST) {
-      if (string_len(suffix) == 0) {
-        out_ty = TK_INT_CONST;
-      } else if (string_eq2(suffix, "l")) {
-        out_ty = TK_LONG_CONST;
-      } else if (string_eq2(suffix, "u")) {
-        out_ty = TK_UINT_CONST;
-      } else if (string_eq2(suffix, "lu") || string_eq2(suffix, "ul")) {
-        out_ty = TK_ULONG_CONST;
-      } else {
-        emit_error(pos, "Invalid numeric literal suffix for integer");
-        return false;
-      }
-    } else if (string_len(suffix) > 0) {
-      // handle double suffix, for now empty.
-      emit_error(pos, "Invalid numeric literal suffix for double: %s",
-                 cstring(suffix));
-      return false;
-    }
+    char next_char = file_pos_peek_char_at(pos, n);
 
     // TODO: we have to check that the number ends at a word boundary.
     // Currently we check this by looking at the next character and seeing if
@@ -272,12 +285,17 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
     }
   }
 
-  out_token->ty = out_ty;
+  out_token->ty = TK_DOUBLE_CONST;
   out_token->pos = *pos;
 
   // Note: content will contain the suffix if it exists.
   out_token->content = string_substring(pos->contents, pos->idx, n);
   return true;
+}
+
+static bool match_num_constant(const FilePos* pos, Token* out_token) {
+  return match_int_constant(pos, out_token) ||
+         match_double_constant(pos, out_token);
 }
 
 Vec* lex(const String* input) {

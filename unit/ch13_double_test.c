@@ -1,5 +1,8 @@
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
+#include <vcc/ast.h>
 #include <vcc/lex.h>
 #include <vcc/string.h>
 
@@ -124,17 +127,43 @@ void lex_test(void) {
   }
 }
 
+void simple_test(void) {
+  const char* prog = R(int main(void) {
+    \n double x = 3.0;
+    \n return 0;
+    \n
+  });
+
+  String* input = string_from(prog);
+  Vec* tokens = lex(input);
+  assert(tokens);
+
+  AstProgram* ast = parse_ast(tokens);
+  assert(ast);
+
+  AstDecl* main_func = vec_get(ast->decls, 0);
+  assert(main_func->ty == AST_DECL_FN);
+  assert(string_eq2(main_func->fn.name, "main"));
+  assert(main_func->fn.return_type == TYPE_INT);
+
+  AstBlockItem* b = vec_get(main_func->fn.body, 0);
+  assert(b->ty == BLOCK_DECL);
+
+  AstDecl* double_x = b->decl;
+  assert(double_x->ty == AST_DECL_VAR);
+  assert(string_eq2(double_x->var.name, "x.0"));
+  assert(double_x->var.c_type == TYPE_DOUBLE);
+
+  AstExpr* init = double_x->var.init;
+  assert(init);
+  assert(init->ty == EXPR_CONST);
+  assert(init->const_.c_type == TYPE_DOUBLE);
+  assert(init->const_.double_storage_ == 3.0);
+}
+
 int main(void) {
   lex_test();
-  //   const char* prog = R(int main(void) {
-  //     \n double x = 3.0;
-  //     \n return 0;
-  //     \n
-  //   });
-  //
-  //   String* input = string_from(prog);
-  //   Vec* tokens = lex(input);
-  //   assert(tokens);
+  simple_test();
 
   printf("Ch 13 pass\n");
   return 0;
