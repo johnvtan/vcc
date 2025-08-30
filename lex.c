@@ -86,7 +86,7 @@ static inline bool is_ident_char(char c) {
 
 static size_t find_next_whitespace(const FilePos* pos) {
   size_t n = 0;
-  while (!file_pos_is_eof(pos)) {
+  while (!file_pos_is_eof_at(pos, n)) {
     if (is_whitespace(file_pos_peek_char_at(pos, n))) {
       break;
     }
@@ -177,7 +177,11 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
   TokenType out_ty = TK_INT_CONST;
 
   size_t n = match_digits(pos, 0);
-  if (n == 0) {
+  const bool leading_digits = n != 0;
+  bool has_fractional = false;
+
+  // Doubles without leading digits are allowed. E.g. .23
+  if (!leading_digits && file_pos_peek_char_at(pos, n) != '.') {
     return false;
   }
 
@@ -189,8 +193,15 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
       n++;
       // consume the fractional part of the double.
       // It's possible there are no digits after the period.
-      n = match_digits(pos, n);
+      size_t new_n = match_digits(pos, n);
+      has_fractional = (new_n != n);
+      n = new_n;
     }
+  }
+
+  if (!leading_digits && !has_fractional) {
+    emit_error(pos, "Just a period?");
+    return false;
   }
 
   if (!file_pos_is_eof_at(pos, n)) {
@@ -222,12 +233,14 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
     // Now parse the suffix. This should
     String* suffix = string_new();
     char next_char;
-    while ((next_char = tolower(file_pos_peek_char_at(pos, n)))) {
+    while (!file_pos_is_eof_at(pos, n) &&
+           (next_char = tolower(file_pos_peek_char_at(pos, n)))) {
       if (next_char == 'l' || next_char == 'u') {
         string_append(suffix, next_char);
         n++;
         continue;
       }
+
       break;
     }
 
@@ -244,9 +257,10 @@ static bool match_num_constant(const FilePos* pos, Token* out_token) {
         emit_error(pos, "Invalid numeric literal suffix for integer");
         return false;
       }
-    } else {
+    } else if (string_len(suffix) > 0) {
       // handle double suffix, for now empty.
-      emit_error(pos, "Invalid numeric literal suffix for double");
+      emit_error(pos, "Invalid numeric literal suffix for double: %s",
+                 cstring(suffix));
       return false;
     }
 

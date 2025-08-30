@@ -12,7 +12,7 @@ String* file_pos_current_line(const FilePos* pos) {
 
   // Find next newline to get extents of the current line
   size_t n = 0;
-  while (!file_pos_is_eof(pos) && file_pos_peek_char_at(pos, n) != '\n') {
+  while (!file_pos_is_eof_at(pos, n) && file_pos_peek_char_at(pos, n) != '\n') {
     n++;
   }
 
