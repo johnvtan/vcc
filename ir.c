@@ -127,14 +127,14 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr);
 static CompTimeConst one(CType c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  ret.int_storage_ = 1;
+  ret.numeric.int_ = 1;
   return ret;
 }
 
 CompTimeConst zero(CType c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  ret.int_storage_ = 0;
+  ret.numeric.int_ = 0;
   return ret;
 }
 

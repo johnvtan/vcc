@@ -42,9 +42,26 @@ bool type_is_signed(CType ty) {
   }
 }
 
+bool type_is_integer(CType ty) {
+  switch (ty) {
+    case TYPE_INT:
+    case TYPE_UINT:
+    case TYPE_LONG:
+    case TYPE_ULONG:
+      return true;
+    case TYPE_DOUBLE:
+    default:
+      return false;
+  }
+}
+
 CType get_common_type(CType t1, CType t2) {
   if (t1 == t2) {
     return t1;
+  }
+
+  if (t1 == TYPE_DOUBLE || t2 == TYPE_DOUBLE) {
+    return TYPE_DOUBLE;
   }
 
   TypeSize t1_size = get_type_size(t1);
@@ -80,19 +97,45 @@ static AstExpr* convert_to(AstExpr* e, CType target_type) {
   return cast(e, target_type);
 }
 
-static uint64_t cast_underlying_storage(uint64_t val, CType target_type) {
-  switch (target_type) {
-    case TYPE_INT:
-      return (int)val;
-    case TYPE_LONG:
-      return (long)val;
-    case TYPE_UINT:
-      return (unsigned int)val;
-    case TYPE_ULONG:
-      return (unsigned long)val;
-    default:
-      assert(false);
+static NumericValue cast_numeric_value(NumericValue val, CType from, CType to) {
+  if (from == to) {
+    return val;
   }
+
+  if (type_is_integer(from)) {
+    switch (to) {
+      case TYPE_INT:
+        return (NumericValue){.int_ = (int)val.int_};
+      case TYPE_LONG:
+        return (NumericValue){.int_ = (long)val.int_};
+      case TYPE_UINT:
+        return (NumericValue){.int_ = (unsigned int)val.int_};
+      case TYPE_ULONG:
+        return (NumericValue){.int_ = (unsigned long)val.int_};
+      case TYPE_DOUBLE:
+        return (NumericValue){.double_ = (double)val.int_};
+      case TYPE_NONE:
+        assert(false);
+    }
+  } else {
+    assert(from == TYPE_DOUBLE);
+    switch (to) {
+      case TYPE_INT:
+        return (NumericValue){.int_ = (int)val.double_};
+      case TYPE_LONG:
+        return (NumericValue){.int_ = (long)val.double_};
+      case TYPE_UINT:
+        return (NumericValue){.int_ = (unsigned int)val.double_};
+      case TYPE_ULONG:
+        return (NumericValue){.int_ = (unsigned long)val.double_};
+      case TYPE_DOUBLE:
+        return (NumericValue){.double_ = (double)val.double_};
+      case TYPE_NONE:
+        assert(false);
+    }
+  }
+
+  panic("Unhandled cast of numeric value: from=%u, to=%u", from, to);
 }
 
 static CompTimeConst convert_comptime_const_to(CompTimeConst c,
@@ -103,7 +146,7 @@ static CompTimeConst convert_comptime_const_to(CompTimeConst c,
 
   CompTimeConst ret = {
       .c_type = target_type,
-      .int_storage_ = cast_underlying_storage(c.int_storage_, target_type)};
+      .numeric = cast_numeric_value(c.numeric, c.c_type, target_type)};
   return ret;
 }
 
@@ -113,7 +156,7 @@ static StaticInit convert_static_init_to(StaticInit init, CType target_type) {
   }
   return (StaticInit){
       .c_type = target_type,
-      .storage_ = cast_underlying_storage(init.storage_, target_type)};
+      .numeric = cast_numeric_value(init.numeric, init.c_type, target_type)};
 }
 
 static StaticInit to_static_init(AstExpr* e) {
@@ -121,7 +164,7 @@ static StaticInit to_static_init(AstExpr* e) {
   StaticInit ret = {
       .ty = INIT_HAS_VALUE,
       .c_type = e->c_type,
-      .storage_ = e->const_.int_storage_,
+      .numeric = e->const_.numeric,
   };
   return ret;
 }
@@ -276,7 +319,7 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
                                               .init = {
                                                   .ty = INIT_HAS_VALUE,
                                                   .c_type = TYPE_INT,
-                                                  .storage_ = 0,
+                                                  .numeric = {0},
                                               }}};
 
     if (decl->var.init) {
@@ -352,6 +395,8 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       return;
     }
     case EXPR_UNARY: {
+      // TODO: when implementing bitwise, need to enforce that bitwise
+      // complement (~) only accepts integer arguments.
       typecheck_expr(cx, expr->unary.expr);
       switch (expr->unary.op) {
         case UNARY_POSTINC:
@@ -359,6 +404,12 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
         case UNARY_PREINC:
         case UNARY_PREDEC:
           check_lvalue(expr->unary.expr);
+          break;
+        case UNARY_COMPLEMENT:
+          if (!type_is_integer(expr->unary.expr->c_type)) {
+            panic("Unary complement operand must be an integer", 1);
+          }
+          break;
         default:
           break;
       }
@@ -375,6 +426,15 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       assert(expr->binary.lhs->c_type != TYPE_NONE);
       typecheck_expr(cx, expr->binary.rhs);
       assert(expr->binary.rhs->c_type != TYPE_NONE);
+
+      if (expr->binary.op == BINARY_REM ||
+          expr->binary.op == BINARY_REM_ASSIGN) {
+        // Remainder operator is only valid on integer operands.
+        if (!type_is_integer(expr->binary.lhs->c_type) ||
+            !type_is_integer(expr->binary.rhs->c_type)) {
+          panic("Remainder operator is only valid for integer operands.", 1);
+        }
+      }
 
       // For assigns, implicitly convert rhs to lhs type.
       if (is_assign(expr)) {
@@ -485,13 +545,13 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
 static String* comptime_const_to_string(CompTimeConst c) {
   switch (c.c_type) {
     case TYPE_INT:
-      return string_format("%d", c.int_storage_);
+      return string_format("%d", c.numeric.int_);
     case TYPE_LONG:
-      return string_format("%ldL", c.int_storage_);
+      return string_format("%ldL", c.numeric.int_);
     case TYPE_UINT:
-      return string_format("%uU", c.int_storage_);
+      return string_format("%uU", c.numeric.int_);
     case TYPE_ULONG:
-      return string_format("%uUL", c.int_storage_);
+      return string_format("%uUL", c.numeric.int_);
     default:
       assert(false);
   }
@@ -564,6 +624,10 @@ static void typecheck_statement(Context* cx, AstStmt* stmt) {
           }
           has_default = true;
           continue;
+        }
+
+        if (!type_is_integer(iter.case_->const_expr.c_type)) {
+          panic("Cases must be integer constants", 1);
         }
 
         // Convert each case expression to the type used in the switch

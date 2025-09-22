@@ -408,7 +408,7 @@ static AstExpr* parse_primary(ParseContext* cx) {
     }
 
     AstExpr* constant = expr(EXPR_CONST);
-    constant->const_.int_storage_ = parsed;
+    constant->const_.numeric.int_ = parsed;
     constant->c_type = c_type;
     constant->const_.c_type = c_type;
     return constant;
@@ -429,7 +429,7 @@ static AstExpr* parse_primary(ParseContext* cx) {
     errno = 0;
 
     AstExpr* constant = expr(EXPR_CONST);
-    constant->const_.double_storage_ = d;
+    constant->const_.numeric.double_ = d;
     constant->c_type = TYPE_DOUBLE;
     constant->const_.c_type = TYPE_DOUBLE;
     return constant;

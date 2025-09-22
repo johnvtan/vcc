@@ -21,13 +21,15 @@ typedef enum CType {
   TYPE_DOUBLE,
 } CType;
 
+typedef union {
+  uint64_t int_;
+  double double_;
+} NumericValue;
+
 // Container for a compile time constant.
 typedef struct {
   CType c_type;
-  union {
-    uint64_t int_storage_;
-    double double_storage_;
-  };
+  NumericValue numeric;
 } CompTimeConst;
 
 //
@@ -145,11 +147,6 @@ typedef struct {
   StorageClass storage_class;
   union {
     struct {
-      enum {
-        VAR_LOCAL,
-        VAR_STATIC,
-      } ty;
-
       String* name;
       CType c_type;
 

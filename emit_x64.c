@@ -248,7 +248,7 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
     emit(cx, "\t.globl " ASM_SYMBOL_PREFIX "%s\n", cstring(sv->name));
   }
 
-  if (sv->init.storage_ == 0) {
+  if (sv->init.numeric.int_ == 0) {
     emit(cx, ".bss\n");
     emit(cx, "\t.balign %d\n", sv->alignment);
     emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
@@ -261,16 +261,16 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
   emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
   switch (sv->init.c_type) {
     case TYPE_INT:
-      emit(cx, "\t.long %d\n", (int)sv->init.storage_);
+      emit(cx, "\t.long %d\n", (int)sv->init.numeric.int_);
       break;
     case TYPE_LONG:
-      emit(cx, "\t.quad %ld\n", (long)sv->init.storage_);
+      emit(cx, "\t.quad %ld\n", (long)sv->init.numeric.int_);
       break;
     case TYPE_UINT:
-      emit(cx, "\t.long %u\n", (unsigned int)sv->init.storage_);
+      emit(cx, "\t.long %u\n", (unsigned int)sv->init.numeric.int_);
       break;
     case TYPE_ULONG:
-      emit(cx, "\t.quad %lu\n", (unsigned long)sv->init.storage_);
+      emit(cx, "\t.quad %lu\n", (unsigned long)sv->init.numeric.int_);
       break;
     default:
       assert(false);

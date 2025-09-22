@@ -13,10 +13,8 @@ typedef struct {
   } ty;
 
   // only for INIT_HAS_VALUE
-  struct {
-    CType c_type;
-    uint64_t storage_;
-  };
+  CType c_type;
+  NumericValue numeric;
 } StaticInit;
 
 typedef struct {
