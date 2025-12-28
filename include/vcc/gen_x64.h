@@ -26,14 +26,10 @@ typedef enum {
   REG_SP,
 } x64_RegType;
 
-// Determines the suffix used for some instructions.
-// E.g. a MOV with a QUADWORD size will be movq.
-// The value for each enum variant is the suffix used for
-// the instruction.
 typedef enum {
-  QUADWORD = 'q',
-  LONGWORD = 'l',
-} x64_Size;
+  X64_TY_QUADWORD,
+  X64_TY_LONGWORD,
+} x64_Type;
 
 typedef struct {
   x64_OperandType ty;
@@ -92,7 +88,7 @@ typedef enum {
 
 typedef struct {
   x64_InstructionType ty;
-  x64_Size size;
+  x64_Type asm_type;
 
   // Most instruction types
   struct {

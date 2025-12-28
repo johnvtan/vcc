@@ -243,6 +243,20 @@ static IrVal* ir_cast(Context* cx, IrVal* val, CType from, CType to) {
   }
 
   IrVal* dst = temp(cx, to);
+  if (from == TYPE_DOUBLE && type_is_integer(to)) {
+    IrType ty = type_is_signed(to) ? IR_DOUBLE_TO_INT : IR_DOUBLE_TO_UINT;
+    push_inst(cx->out, unary(ty, val, dst));
+    return dst;
+  }
+
+  if (type_is_integer(from) && to == TYPE_DOUBLE) {
+    IrType ty = type_is_signed(from) ? IR_INT_TO_DOUBLE : IR_UINT_TO_DOUBLE;
+    push_inst(cx->out, unary(ty, val, dst));
+    return dst;
+  }
+
+  // convert between integer types
+  assert(type_is_integer(from) && type_is_integer(to));
 
   TypeSize from_size = get_type_size(from);
   TypeSize to_size = get_type_size(to);

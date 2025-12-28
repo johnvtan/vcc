@@ -31,7 +31,7 @@ static void emit(Context* cx, const char* fmt, ...) {
   va_end(args);
 }
 
-static void emit_operand(Context* cx, const x64_Operand* op, x64_Size size) {
+static void emit_operand(Context* cx, const x64_Operand* op, x64_Type type) {
   switch (op->ty) {
     case X64_OP_IMM: {
       // By this point, we should have the correct value in op->imm, including
@@ -45,7 +45,7 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Size size) {
     }
     case X64_OP_REG: {
       const char* reg_str = NULL;
-      if (size == QUADWORD) {
+      if (type == X64_TY_QUADWORD) {
         static const char* reg_map[] = {
             [REG_AX] = "rax", [REG_DX] = "rdx",  [REG_DI] = "rdi",
             [REG_CX] = "rcx", [REG_SI] = "rsi",  [REG_R8] = "r8",
@@ -53,7 +53,7 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Size size) {
             [REG_SP] = "rsp",
         };
         reg_str = reg_map[op->reg];
-      } else if (size == LONGWORD) {
+      } else if (type == X64_TY_LONGWORD) {
         static const char* reg_map[] = {
             [REG_AX] = "eax", [REG_DX] = "edx",   [REG_DI] = "edi",
             [REG_CX] = "ecx", [REG_SI] = "esi",   [REG_R8] = "r8d",
@@ -62,7 +62,7 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Size size) {
         };
         reg_str = reg_map[op->reg];
       } else {
-        panic("Unexpected reg op size %u", size);
+        panic("Unexpected reg op type %u", type);
       }
       emit(cx, "%%%s", reg_str);
       break;
@@ -84,27 +84,38 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Size size) {
   }
 }
 
+static const char* asm_type_to_suffix(x64_Type type) {
+  switch (type) {
+    case X64_TY_LONGWORD:
+      return "l";
+    case X64_TY_QUADWORD:
+      return "q";
+    default:
+      panic("Unhandled asm type %u", type);
+  }
+}
+
 static void emit2(Context* cx, const char* inst, const x64_Operand* src,
-                  const x64_Operand* dst, const x64_Size size) {
-  emit(cx, "\t%s%c ", inst, size);
-  emit_operand(cx, src, size);
+                  const x64_Operand* dst, const x64_Type type) {
+  emit(cx, "\t%s%s ", inst, asm_type_to_suffix(type));
+  emit_operand(cx, src, type);
   emit(cx, ", ");
-  emit_operand(cx, dst, size);
+  emit_operand(cx, dst, type);
   emit(cx, "\n");
 }
 
 static void emit1(Context* cx, const char* inst, const x64_Operand* arg,
-                  const x64_Size size) {
-  emit(cx, "\t%s%c ", inst, size);
-  emit_operand(cx, arg, size);
+                  const x64_Type type) {
+  emit(cx, "\t%s%s ", inst, asm_type_to_suffix(type));
+  emit_operand(cx, arg, type);
   emit(cx, "\n");
 }
 
 static void emit_jump(Context* cx, const char* inst, const x64_Operand* arg) {
   emit(cx, "\t%s ", inst);
 
-  // size argument not used for jumps
-  emit_operand(cx, arg, LONGWORD);
+  // type argument not used for jumps
+  emit_operand(cx, arg, X64_TY_LONGWORD);
   emit(cx, "\n");
 }
 
@@ -143,43 +154,43 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       break;
     }
     case X64_MOV: {
-      emit2(cx, "mov", inst->r1, inst->r2, inst->size);
+      emit2(cx, "mov", inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_NEG: {
-      emit1(cx, "neg", inst->r1, inst->size);
+      emit1(cx, "neg", inst->r1, inst->asm_type);
       break;
     }
     case X64_NOT: {
-      emit1(cx, "not", inst->r1, inst->size);
+      emit1(cx, "not", inst->r1, inst->asm_type);
       break;
     }
     case X64_ADD: {
-      emit2(cx, "add", inst->r1, inst->r2, inst->size);
+      emit2(cx, "add", inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_SUB: {
-      emit2(cx, "sub", inst->r1, inst->r2, inst->size);
+      emit2(cx, "sub", inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_MUL: {
-      emit2(cx, "imul", inst->r1, inst->r2, inst->size);
+      emit2(cx, "imul", inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_CMP: {
-      emit2(cx, "cmp", inst->r1, inst->r2, inst->size);
+      emit2(cx, "cmp", inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_IDIV: {
-      emit1(cx, "idiv", inst->r1, inst->size);
+      emit1(cx, "idiv", inst->r1, inst->asm_type);
       break;
     }
     case X64_DIV: {
-      emit1(cx, "div", inst->r1, inst->size);
+      emit1(cx, "div", inst->r1, inst->asm_type);
       break;
     }
     case X64_CDQ: {
-      if (inst->size == QUADWORD) {
+      if (inst->asm_type == X64_TY_QUADWORD) {
         emit(cx, "\tcqo\n");
       } else {
         emit(cx, "\tcdq\n");
@@ -213,16 +224,16 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       break;
     }
     case X64_PUSH: {
-      // TODO(johntan): cleanup? Just hardcoding QUADWORD rn.
-      emit1(cx, "push", inst->r1, QUADWORD);
+      // TODO(johntan): cleanup? Just hardcoding X64_TY_QUADWORD rn.
+      emit1(cx, "push", inst->r1, X64_TY_QUADWORD);
       break;
     }
     case X64_MOVSX: {
       // I think movslq is always long -> quad?
       emit(cx, "\tmovslq ");
-      emit_operand(cx, inst->r1, LONGWORD);
+      emit_operand(cx, inst->r1, X64_TY_LONGWORD);
       emit(cx, ", ");
-      emit_operand(cx, inst->r2, QUADWORD);
+      emit_operand(cx, inst->r2, X64_TY_QUADWORD);
       emit(cx, "\n");
       break;
     }

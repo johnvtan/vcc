@@ -81,6 +81,7 @@ typedef enum {
 CType get_common_type(CType t1, CType t2);
 TypeSize get_type_size(CType ty);
 bool type_is_signed(CType ty);
+bool type_is_integer(CType ty);
 
 SymbolTable* typecheck_ast(AstProgram* prog);
 #endif  // VCC_TYPECHECK_H
