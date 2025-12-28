@@ -17,6 +17,8 @@ typedef struct {
   NumericValue numeric;
 } StaticInit;
 
+// TODO: add dump static init func here.
+
 typedef struct {
   CType c_type;
   bool global;

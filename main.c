@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <vcc/ast.h>
+#include <vcc/dump.h>
 #include <vcc/emit_x64.h>
 #include <vcc/gen_x64.h>
 #include <vcc/ir.h>
@@ -17,6 +18,7 @@ static const struct option long_options[] = {
     {"validate", optional_argument, NULL, 'v'},
     {"tacky", optional_argument, NULL, 't'},
     {"codegen", optional_argument, NULL, 'c'},
+    {"dump", optional_argument, NULL, 'd'},
     {0},
 };
 
@@ -24,6 +26,7 @@ typedef struct {
   enum { LEX, PARSE, VALIDATE, TACKY, CODEGEN, EMIT } stage;
   char* input;
   char* output;
+  bool dump;
 } CompilerArgs;
 
 void usage(void) {
@@ -35,11 +38,11 @@ void usage(void) {
 
 CompilerArgs parse_args(int argc, char** argv) {
   // By default emit code
-  CompilerArgs args = {.stage = EMIT};
+  CompilerArgs args = {.stage = EMIT, .dump = false};
 
   // Note: options will override each other, so the last one wins.
   char ch;
-  while ((ch = getopt_long(argc, argv, "l:p:c:t:v:", long_options, NULL)) !=
+  while ((ch = getopt_long(argc, argv, "l:p:c:t:v:d:", long_options, NULL)) !=
          -1) {
     switch (ch) {
       case 'l':
@@ -56,6 +59,9 @@ CompilerArgs parse_args(int argc, char** argv) {
         continue;
       case 'c':
         args.stage = CODEGEN;
+        continue;
+      case 'd':
+        args.dump = true;
         continue;
       default:
         break;
@@ -106,15 +112,21 @@ int main(int argc, char** argv) {
     return -1;
   }
   if (args.stage == TACKY) {
+    if (args.dump) {
+      dump_ir(ir_prog);
+    }
     return 0;
   }
 
-  x64_Program* x64_prog = generate_x86(ir_prog);
+  x64_Program* x64_prog = generate_x64(ir_prog);
   if (!x64_prog) {
     return -1;
   }
 
   if (args.stage == CODEGEN) {
+    if (args.dump) {
+      dump_x64(x64_prog);
+    }
     return 0;
   }
 

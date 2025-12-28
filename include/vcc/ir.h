@@ -11,6 +11,8 @@ typedef struct {
     IR_VAL_VAR,
   } ty;
 
+  // TODO: should this also contain the C type?
+
   union {
     CompTimeConst constant;
     String* var;
@@ -31,7 +33,6 @@ typedef enum {
 
   IR_UNARY_COMPLEMENT,
   IR_UNARY_NEG,
-  IR_UNARY_NOT,
 
   IR_ADD,
   IR_SUB,
@@ -98,7 +99,6 @@ typedef struct {
 } IrProgram;
 
 // Helpers that are used in gen_x64.c
-CompTimeConst zero(CType c_type);
 IrVal* constant(CompTimeConst c);
 IrProgram* gen_ir(AstProgram* program, SymbolTable* symbol_table);
 

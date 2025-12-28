@@ -1,12 +1,24 @@
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 #include <vcc/errors.h>
 #include <vcc/gen_x64.h>
 #include <vcc/hashmap.h>
 
 typedef struct {
+  // Vec<x64_StaticConst>
+  Vec* out;
+
+  // Map from string repr of constant --> label of constant
+  Hashmap* map;
+
+  int num;
+} StaticConstContext;
+
+typedef struct {
   SymbolTable* symbol_table;
+  StaticConstContext* static_consts;
 
   // For pseudo regs.
   Hashmap* stack_map;
@@ -19,6 +31,7 @@ typedef struct {
 static int asm_type_to_size_bytes(x64_Type type) {
   switch (type) {
     case X64_TY_QUADWORD:
+    case X64_TY_DOUBLE:
       return 8;
     case X64_TY_LONGWORD:
       return 4;
@@ -35,6 +48,8 @@ static x64_Type c_to_asm_type(CType c_type) {
     case TYPE_LONG:
     case TYPE_ULONG:
       return X64_TY_QUADWORD;
+    case TYPE_DOUBLE:
+      return X64_TY_DOUBLE;
     default:
       assert(false);
   }
@@ -96,10 +111,13 @@ static x64_Type asm_type_of(Context* cx, IrInstruction* ir) {
   return type;
 }
 
-static x64_Operand ZERO = {
-    .ty = X64_OP_IMM,
-    .imm = 0,
-};
+static x64_RegType fixup_src_reg(x64_Type type) {
+  return type == X64_TY_DOUBLE ? REG_XMM14 : REG_R10;
+}
+
+static x64_RegType fixup_dst_reg(x64_Type type) {
+  return type == X64_TY_DOUBLE ? REG_XMM15 : REG_R11;
+}
 
 //
 // x64_Operand helpers
@@ -127,10 +145,11 @@ static x64_Operand* stack(int val) {
   return ret;
 }
 
-static x64_Operand* data(String* ident) {
+static x64_Operand* data(String* ident, bool constant) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_DATA;
   ret->ident = ident;
+  ret->is_constant = constant;
   return ret;
 }
 
@@ -151,7 +170,7 @@ static x64_Operand* pseudo(Context* cx, String* name) {
 
   // Emit data operands for static variables.
   if (st_entry->ty == ST_STATIC_VAR) {
-    return data(name);
+    return data(name, false);
   }
 
   x64_Type type = c_to_asm_type(st_entry->local.c_type);
@@ -178,20 +197,49 @@ static x64_Operand* label_op(String* label) {
   return ret;
 }
 
-static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
-  x64_Operand* ret = NULL;
-  switch (ir->ty) {
-    case IR_VAL_CONST:
-      ret = imm(ir->constant.numeric.int_, ir->constant.c_type);
-      break;
-    case IR_VAL_VAR:
-      ret = pseudo(cx, ir->var);
-      break;
-    default:
-      panic("Unexpected IrVal type %lu", ir->ty);
+static String* double_const(Context* cx, double d, int align) {
+  // Create a mapping from the actual value of the double to the generated
+  // constant label. We don't use the stringified value of the double directly
+  // as the label because it may be negative, and the assembler doesn't allow
+  // hyphens in labels.
+
+  // Note: %a formats the double as a hexadecimal float which can be thought of
+  // as the "whole float". See
+  // https://stackoverflow.com/questions/31861160/get-printf-to-print-all-float-digits
+  String* double_as_string = string_format("%a", d);
+  String* static_const_ident =
+      hashmap_get(cx->static_consts->map, double_as_string);
+  if (static_const_ident == NULL) {
+    // Create a new static constant if this is the first instance.
+    static_const_ident =
+        string_format(".SC_DOUBLE_%d", cx->static_consts->num++);
+    hashmap_put(cx->static_consts->map, double_as_string, static_const_ident);
+
+    x64_StaticConst static_const = {.name = static_const_ident,
+                                    .init = {.ty = INIT_HAS_VALUE,
+                                             .c_type = TYPE_DOUBLE,
+                                             .numeric = {.double_ = d}},
+                                    .alignment = align};
+    vec_push(cx->static_consts->out, &static_const);
   }
 
-  return ret;
+  return static_const_ident;
+}
+
+static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
+  if (ir->ty == IR_VAL_VAR) {
+    return pseudo(cx, ir->var);
+  }
+
+  assert(ir->ty == IR_VAL_CONST);
+  CompTimeConst c = ir->constant;
+
+  if (type_is_integer(c.c_type)) {
+    return imm(c.numeric.int_, c.c_type);
+  }
+
+  assert(c.c_type == TYPE_DOUBLE);
+  return data(double_const(cx, c.numeric.double_, 8), true);
 }
 
 static inline bool op_is_stack_or_data(x64_Operand* op) {
@@ -249,14 +297,56 @@ static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
   // Can only move 32 bit immediates directly into memory.
   bool imm_too_large = op_is_stack_or_data(r2) && r1->ty == X64_OP_IMM &&
                        r1->imm > (uint64_t)INT_MAX;
+
+  // Doubles shouldn't use immediates, sanity check here.
+  assert(!(imm_too_large && type == X64_TY_DOUBLE));
+
   if (is_mem_to_mem || imm_too_large) {
-    // insert intermediate move to r10
-    x64_Operand* r10 = reg(REG_R10);
-    instr2(cx, X64_MOV, r1, r10, type);
-    instr2(cx, X64_MOV, r10, r2, type);
+    // insert intermediate move to fixup reg based on type.
+    x64_Operand* fixup = reg(fixup_src_reg(type));
+    instr2(cx, X64_MOV, r1, fixup, type);
+    instr2(cx, X64_MOV, fixup, r2, type);
   } else {
     instr2(cx, X64_MOV, r1, r2, type);
   }
+}
+
+static void cvttsd2si(Context* cx, x64_Operand* src, x64_Operand* dst,
+                      x64_Type dst_type) {
+  if (dst->ty == X64_OP_REG) {
+    instr2(cx, X64_CVTTSD2SI, src, dst, dst_type);
+    return;
+  }
+
+  // The destination for CVTSDD2SI must be a reg, so insert an
+  // intermediate move here.
+  assert(dst->ty == X64_OP_STACK);
+
+  x64_Operand* fixup = reg(fixup_dst_reg(dst_type));
+  instr2(cx, X64_CVTTSD2SI, src, fixup, dst_type);
+  mov(cx, fixup, dst, dst_type);
+}
+
+static void cvtsi2sd(Context* cx, x64_Operand* src, x64_Operand* dst,
+                     x64_Type src_type) {
+  if (src->ty == X64_OP_IMM) {
+    x64_Operand* fixup = reg(fixup_src_reg(src_type));
+    mov(cx, src, fixup, src_type);
+    src = fixup;
+  }
+
+  if (dst->ty == X64_OP_REG) {
+    instr2(cx, X64_CVTSI2SD, src, dst, src_type);
+    return;
+  }
+
+  // The destination for CVTSI2SD must be a register, so insert an
+  // intermediate move to xmm15 here.
+  assert(dst->ty == X64_OP_STACK);
+
+  x64_Operand* fixup = reg(fixup_dst_reg(X64_TY_DOUBLE));
+  instr2(cx, X64_CVTSI2SD, src, fixup, src_type);
+  mov(cx, fixup, dst, X64_TY_DOUBLE);
 }
 
 static inline x64_Operand* mov_to_reg(Context* cx, x64_Operand* arg,
@@ -266,13 +356,28 @@ static inline x64_Operand* mov_to_reg(Context* cx, x64_Operand* arg,
   return reg_op;
 }
 
+x64_Operand* zero(Context* cx, CType c_type) {
+  if (type_is_integer(c_type)) {
+    static x64_Operand ZERO_INT = {
+        .ty = X64_OP_IMM,
+        .imm = 0,
+    };
+
+    return &ZERO_INT;
+  }
+
+  x64_Operand* xmm0 = reg(REG_XMM0);
+  instr2(cx, X64_XOR, xmm0, xmm0, X64_TY_DOUBLE);
+  return xmm0;
+}
+
 static bool imm_bigger_than_int(x64_Operand* op) {
   return op->ty == X64_OP_IMM && op->imm > (uint64_t)INT_MAX;
 }
 
 static inline void push(Context* cx, x64_Operand* arg, x64_Type type) {
   if (imm_bigger_than_int(arg)) {
-    arg = mov_to_reg(cx, arg, REG_R10, type);
+    arg = mov_to_reg(cx, arg, fixup_src_reg(type), type);
   }
   instr1(cx, X64_PUSH, arg, type);
 }
@@ -294,7 +399,86 @@ static void unary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
   return;
 }
 
-static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
+static void binary_inner(Context* cx, x64_InstructionType instr_ty,
+                         x64_Operand* r1, x64_Operand* r2, x64_Type type) {
+  if (type == X64_TY_DOUBLE) {
+    if (r2->ty == X64_OP_REG) {
+      instr2(cx, instr_ty, r1, r2, type);
+    } else {
+      // For binary ops on doubles, the destination must always be a register.
+      x64_Operand* fixup = reg(fixup_dst_reg(type));
+
+      // First, move r2 into the fixup register because r2 contains one of the
+      // operands.
+      mov(cx, r2, fixup, type);
+
+      // Then perform the binary op on r1 and the fixup register.
+      instr2(cx, instr_ty, r1, fixup, type);
+
+      // Then move the result in fixup into r2. Except for CMP, whose result
+      // is really in the status register.
+      if (instr_ty != X64_CMP) {
+        mov(cx, fixup, r2, type);
+      }
+    }
+  } else {
+    // integer instruction
+    switch (instr_ty) {
+      case X64_ADD:
+      case X64_SUB: {
+        bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
+        if (is_mem_to_mem || imm_bigger_than_int(r1)) {
+          r1 = mov_to_reg(cx, r1, fixup_src_reg(type), type);
+        }
+
+        instr2(cx, instr_ty, r1, r2, type);
+        return;
+      }
+      case X64_MUL: {
+        if (imm_bigger_than_int(r1)) {
+          r1 = mov_to_reg(cx, r1, fixup_src_reg(type), type);
+        }
+
+        if (op_is_stack_or_data(r2)) {
+          // mul can't use a stack location as its r2
+          x64_Operand* fixup = reg(fixup_dst_reg(type));
+          instr2(cx, X64_MOV, r2, fixup, type);
+          instr2(cx, X64_MUL, r1, fixup, type);
+          instr2(cx, X64_MOV, fixup, r2, type);
+        } else {
+          instr2(cx, X64_MUL, r1, r2, type);
+        }
+        return;
+      }
+      case X64_CMP: {
+        const bool requires_fixup =
+            (op_is_stack_or_data(r1) && op_is_stack_or_data(r2)) ||
+            imm_bigger_than_int(r1);
+
+        if (requires_fixup) {
+          // insert intermediate move from r2 to r10
+          r1 = mov_to_reg(cx, r1, fixup_src_reg(type), type);
+        }
+
+        if (r2->ty == X64_OP_IMM) {
+          // cmp can't have an imm as its r2, move r2 to r11 and use r11 as the
+          // argument.
+          r2 = mov_to_reg(cx, r2, fixup_dst_reg(type), type);
+        }
+
+        // cmp r2, r1
+        instr2(cx, X64_CMP, r1, r2, type);
+        break;
+      }
+      default:
+        instr2(cx, instr_ty, r1, r2, type);
+        return;
+    }
+  }
+}
+
+static void binary(Context* cx, x64_InstructionType instr_ty,
+                   IrInstruction* ir) {
   x64_Type type = asm_type_of(cx, ir);
 
   x64_Operand* r1;
@@ -314,58 +498,8 @@ static void binary(Context* cx, x64_InstructionType ty, IrInstruction* ir) {
     r2 = ir_dst;
   }
 
-  switch (ty) {
-    case X64_ADD:
-    case X64_SUB: {
-      bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
-      if (is_mem_to_mem || imm_bigger_than_int(r1)) {
-        r1 = mov_to_reg(cx, r1, REG_R10, type);
-      }
-      instr2(cx, ty, r1, r2, type);
-      return;
-    }
-    case X64_MUL: {
-      if (imm_bigger_than_int(r1)) {
-        r1 = mov_to_reg(cx, r1, REG_R10, type);
-      }
-
-      if (op_is_stack_or_data(r2)) {
-        // mul can't use a stack location as its r2
-        x64_Operand* r11 = reg(REG_R11);
-        instr2(cx, X64_MOV, r2, r11, type);
-        instr2(cx, X64_MUL, r1, r11, type);
-        instr2(cx, X64_MOV, r11, r2, type);
-      } else {
-        instr2(cx, X64_MUL, r1, r2, type);
-      }
-      return;
-    }
-    default:
-      instr2(cx, ty, r1, r2, type);
-      return;
-  }
-
-  return;
-}
-
-static void cmp(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Type type) {
-  const bool requires_move_to_r10 =
-      (op_is_stack_or_data(r1) && op_is_stack_or_data(r2)) ||
-      imm_bigger_than_int(r1);
-
-  if (requires_move_to_r10) {
-    // insert intermediate move from r2 to r10
-    r1 = mov_to_reg(cx, r1, REG_R10, type);
-  }
-
-  if (r2->ty == X64_OP_IMM) {
-    // cmp can't have an imm as its r2, move r2 to r11 and use r11 as the
-    // argument.
-    r2 = mov_to_reg(cx, r2, REG_R11, type);
-  }
-
-  // cmp r2, r1
-  instr2(cx, X64_CMP, r1, r2, type);
+  // Fixup binary instruction
+  binary_inner(cx, instr_ty, r1, r2, type);
 }
 
 static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
@@ -379,7 +513,7 @@ static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
   x64_Operand* r2 = to_x64_op(cx, ir->r2);
   x64_Operand* dst = to_x64_op(cx, ir->dst);
 
-  cmp(cx, r2, r1, r1_type);
+  binary_inner(cx, X64_CMP, r2, r1, r1_type);
 
   // mov 0, dst
   mov(cx, imm(0, ir_val_c_type(cx, ir->dst)), dst, dst_type);
@@ -387,7 +521,7 @@ static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
   setcc(cx, cc, dst);
 }
 
-static void divide(Context* cx, IrInstruction* ir) {
+static void divide_int(Context* cx, IrInstruction* ir) {
   CType c_type = ir_val_c_type(cx, ir->r1);
   assert(c_type == ir_val_c_type(cx, ir->r2));
 
@@ -408,32 +542,187 @@ static void divide(Context* cx, IrInstruction* ir) {
   if (r2->ty == X64_OP_IMM) {
     // idiv isn't allowed with immediate args
     // instead, move the arg into a register then idiv on that
-    r2 = mov_to_reg(cx, r2, REG_R10, type);
+    r2 = mov_to_reg(cx, r2, fixup_src_reg(type), type);
   }
   instr1(cx, div_instr, r2, type);
 }
 
-static void movsx(Context* cx, x64_Operand* r1, x64_Operand* r2, x64_Type from,
-                  x64_Type to) {
-  if (r1->ty == X64_OP_IMM) {
-    r1 = mov_to_reg(cx, r1, REG_R10, from);
+static void movsx(Context* cx, x64_Operand* src, x64_Operand* dst,
+                  x64_Type from, x64_Type to) {
+  if (src->ty == X64_OP_IMM) {
+    src = mov_to_reg(cx, src, fixup_src_reg(from), from);
   }
 
-  if (op_is_stack_or_data(r2)) {
-    x64_Operand* r11 = reg(REG_R11);
-    instr2(cx, X64_MOVSX, r1, r11, to);
-    instr2(cx, X64_MOV, r11, r2, to);
+  if (op_is_stack_or_data(dst)) {
+    x64_Operand* fixup = reg(fixup_dst_reg(to));
+    instr2(cx, X64_MOVSX, src, fixup, to);
+    instr2(cx, X64_MOV, fixup, dst, to);
   } else {
-    instr2(cx, X64_MOVSX, r1, r2, to);
+    instr2(cx, X64_MOVSX, src, dst, to);
   }
+}
+
+static void zero_extend(Context* cx, x64_Operand* src, x64_Operand* dst,
+                        x64_Type from, x64_Type to) {
+  if (dst->ty == X64_OP_REG) {
+    // If dst is a reg then simply move from src to dst.
+    // Note that this uses |from| as the type, and presumably when the data is
+    // read from |dst| it will use dst's type (|to|).
+    mov(cx, src, dst, from);
+    return;
+  }
+
+  x64_Operand* fixup = reg(fixup_dst_reg(from));
+
+  // Note that the fixup register has different types here.
+  mov(cx, src, fixup, from);
+  mov(cx, fixup, dst, to);
+}
+
+static bool use_signed_cc(CType c_type) {
+  return type_is_integer(c_type) && type_is_signed(c_type);
+}
+
+//
+// x64 generation function helpers
+//
+static const x64_RegType kGpArgRegs[] = {
+    REG_DI, REG_SI, REG_DX, REG_CX, REG_R8, REG_R9,
+};
+#define NUM_GP_ARG_REGS (sizeof(kGpArgRegs) / sizeof(kGpArgRegs[0]))
+
+static const x64_RegType kFpArgRegs[] = {REG_XMM0, REG_XMM1, REG_XMM2,
+                                         REG_XMM3, REG_XMM4, REG_XMM5,
+                                         REG_XMM6, REG_XMM7};
+#define NUM_FP_ARG_REGS (sizeof(kFpArgRegs) / sizeof(kFpArgRegs[0]))
+
+// Move arguments from registers/stack into dedicated locations on the stack.
+// For simplicity, this currently moves every argument into a new location on
+// the stack, but this can definitely be optimized (e.g., reuse the stack
+// location for arguments that are passed on the stack).
+static int retrieve_fn_args(Context* cx, IrFunction* fn) {
+  int stack_size = 0;
+
+  // Retrieve arguments from registers or stack and move them
+  // into pseudo registers.
+  size_t n_gp = 0;
+  size_t n_fp = 0;
+  size_t n_stack = 0;
+  vec_for_each(fn->params, String, param) {
+    x64_Operand* arg = NULL;
+    x64_Type param_type = symbol_to_asm_type(cx, iter.param);
+    const bool is_fp = param_type == X64_TY_DOUBLE;
+
+    if (is_fp && n_fp < NUM_FP_ARG_REGS) {
+      arg = reg(kFpArgRegs[n_fp++]);
+    } else if (!is_fp && n_gp < NUM_GP_ARG_REGS) {
+      arg = reg(kGpArgRegs[n_gp++]);
+    } else {
+      // arguments are always passed as 8 bytes on the stack.
+      int stack_offset = (8 * n_stack++) + 16;
+      arg = stack(stack_offset);
+    }
+
+    mov(cx, arg, pseudo(cx, iter.param), param_type);
+
+    // Note: this size corresponds to the pseudoreg that the argument is moved
+    // into, not the size of the argument passed on the stack (which is always 8
+    // bytes currently).
+    stack_size += asm_type_to_size_bytes(param_type);
+  }
+
+  return stack_size;
+}
+
+// Put arguments into registers/stack according to the x64 calling convention
+// prior to a function call.
+static int prepare_fn_call(Context* cx, IrInstruction* ir) {
+  assert(ir->ty == IR_FN_CALL);
+
+  //
+  // Separate out all the args by where we will pass them.
+  //
+
+  Vec* gp_args = vec_new(sizeof(IrVal));
+  Vec* fp_args = vec_new(sizeof(IrVal));
+  Vec* stack_args = vec_new(sizeof(IrVal));
+
+  vec_for_each(ir->args, IrVal, arg) {
+    x64_Type type = ir_val_to_asm_type(cx, iter.arg);
+    const bool is_fp = type == X64_TY_DOUBLE;
+
+    if (is_fp && fp_args->len < NUM_FP_ARG_REGS) {
+      vec_push(fp_args, iter.arg);
+    } else if (!is_fp && gp_args->len < NUM_GP_ARG_REGS) {
+      vec_push(gp_args, iter.arg);
+    } else {
+      vec_push(stack_args, iter.arg);
+    }
+  }
+
+  assert(gp_args->len <= NUM_GP_ARG_REGS);
+  assert(fp_args->len <= NUM_FP_ARG_REGS);
+
+  //
+  // Then allocate the arguments to registers/stack.
+  //
+
+  int stack_to_dealloc = 0;
+  if (stack_args->len % 2) {
+    // adjust stack if we have an odd number of arguments.
+    // The x64 stack must be 16 byte aligned.
+    instr2(cx, X64_SUB, imm(8, TYPE_ULONG), reg(REG_SP), X64_TY_QUADWORD);
+    stack_to_dealloc += 8;
+  }
+
+  for (size_t i = 0; i < gp_args->len; i++) {
+    IrVal* val = vec_get(gp_args, i);
+    x64_Type type = ir_val_to_asm_type(cx, val);
+    x64_Operand* arg = to_x64_op(cx, val);
+    x64_Operand* x64_reg = reg(kGpArgRegs[i]);
+    mov(cx, arg, x64_reg, type);
+  }
+
+  for (size_t i = 0; i < fp_args->len; i++) {
+    IrVal* val = vec_get(fp_args, i);
+    x64_Type type = ir_val_to_asm_type(cx, val);
+    assert(type == X64_TY_DOUBLE);
+
+    x64_Operand* arg = to_x64_op(cx, val);
+    x64_Operand* x64_reg = reg(kFpArgRegs[i]);
+    mov(cx, arg, x64_reg, type);
+  }
+
+  // Stack arguments must be pushed in reverse.
+  // Note: i must be signed here otherwise i >= 0 is always true.
+  for (int i = stack_args->len - 1; i >= 0; i--) {
+    IrVal* val = vec_get(stack_args, i);
+    x64_Type type = ir_val_to_asm_type(cx, val);
+    x64_Operand* arg = to_x64_op(cx, val);
+
+    // Note: push will ignore types, but we use them here for
+    // convenience.
+    if (arg->ty == X64_OP_IMM || arg->ty == X64_OP_REG ||
+        type == X64_TY_QUADWORD || type == X64_TY_DOUBLE) {
+      push(cx, arg, type);
+    } else {
+      x64_Operand* fixup = reg(REG_AX);
+      mov(cx, arg, fixup, type);
+      push(cx, fixup, type);
+    }
+    // must deallocate stack reserved for arguments pushed onto the
+    // stack.
+    stack_to_dealloc += 8;
+  }
+
+  return stack_to_dealloc;
 }
 
 //
 // x64 generation passes
 //
-
-static x64_Function* convert_function(IrFunction* ir_function,
-                                      SymbolTable* st) {
+static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
+                                      StaticConstContext* static_consts) {
   x64_Function* ret = function(ir_function->name);
   ret->global = ir_function->global;
 
@@ -443,37 +732,12 @@ static x64_Function* convert_function(IrFunction* ir_function,
   vec_push_empty(ret->instructions);
 
   Context cx = {.symbol_table = st,
+                .static_consts = static_consts,
                 .stack_map = hashmap_new(),
                 .stack_pos = 0,
                 .out = ret->instructions};
 
-  // Retrieve arguments from registers or stack and move them
-  // into pseudo registers.
-  static const x64_RegType kArgumentRegs[] = {
-      REG_DI, REG_SI, REG_DX, REG_CX, REG_R8, REG_R9,
-  };
-  const size_t kNumArgumentRegs = 6;
-
-  size_t n = 0;
-  vec_for_each(ir_function->params, String, param) {
-    x64_Operand* arg = NULL;
-    if (n < kNumArgumentRegs) {
-      arg = reg(kArgumentRegs[n]);
-    } else {
-      // arguments are always passed as 8 bytes on the stack.
-      int stack_offset = (8 * (n - kNumArgumentRegs)) + 16;
-      arg = stack(stack_offset);
-    }
-    n++;
-
-    x64_Type param_type = symbol_to_asm_type(&cx, iter.param);
-    mov(&cx, arg, pseudo(&cx, iter.param), param_type);
-    // TODO: correct sizing.
-    // Note: this size corresponds to the pseudoreg that the argument is moved
-    // into, not the size of the argument passed on the stack (which is always 8
-    // bytes currently).
-    ret->stack_size += asm_type_to_size_bytes(param_type);
-  }
+  ret->stack_size = retrieve_fn_args(&cx, ir_function);
 
   // Handle instructions in the function.
   vec_for_each(ir_function->instructions, IrInstruction, ir_instr) {
@@ -482,10 +746,11 @@ static x64_Function* convert_function(IrFunction* ir_function,
       case IR_RET: {
         // mov $val, %rax
         x64_Type type = ir_val_to_asm_type(&cx, ir->r1);
-        mov(&cx, to_x64_op(&cx, ir->r1), reg(REG_AX), type);
+        x64_Operand* ret = type == X64_TY_DOUBLE ? reg(REG_XMM0) : reg(REG_AX);
+        mov(&cx, to_x64_op(&cx, ir->r1), ret, type);
 
         // type for RET should be ignored.
-        instr0(&cx, X64_RET, X64_TY_QUADWORD);
+        instr0(&cx, X64_RET, type);
         break;
       }
       case IR_UNARY_COMPLEMENT: {
@@ -493,14 +758,26 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_UNARY_NEG: {
-        unary(&cx, X64_NEG, ir);
-        break;
-      }
-      case IR_UNARY_NOT: {
-        // this is rewritten as a cmp 0, r1
-        ir->r2 = ir->r1;
-        ir->r1 = constant(zero(ir_val_c_type(&cx, ir->r1)));
-        cmp_and_setcc(&cx, CC_E, ir);
+        if (type_is_integer(ir_val_c_type(&cx, ir->r1))) {
+          unary(&cx, X64_NEG, ir);
+        } else {
+          assert(ir_val_c_type(&cx, ir->r1) == TYPE_DOUBLE);
+          x64_Type asm_type = asm_type_of(&cx, ir);
+
+          // Must be 16 byte aligned for xorpd instruction.
+          String* neg_zero = double_const(&cx, -0.0, 16);
+          x64_Operand* dst = to_x64_op(&cx, ir->dst);
+          if (dst->ty == X64_OP_REG) {
+            mov(&cx, to_x64_op(&cx, ir->r1), dst, asm_type);
+            instr2(&cx, X64_XOR, data(neg_zero, true), dst, asm_type);
+          } else {
+            // xorpd requires dst to be a register.
+            x64_Operand* fixup = reg(fixup_dst_reg(asm_type));
+            mov(&cx, to_x64_op(&cx, ir->r1), fixup, asm_type);
+            instr2(&cx, X64_XOR, data(neg_zero, true), fixup, asm_type);
+            mov(&cx, fixup, dst, asm_type);
+          }
+        }
         break;
       }
       case IR_ADD: {
@@ -517,38 +794,30 @@ static x64_Function* convert_function(IrFunction* ir_function,
       }
       case IR_GT: {
         assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
-        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
-          cmp_and_setcc(&cx, CC_G, ir);
-        } else {
-          cmp_and_setcc(&cx, CC_A, ir);
-        }
+        x64_ConditionCode cc =
+            use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_G : CC_A;
+        cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_GTEQ: {
         assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
-        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
-          cmp_and_setcc(&cx, CC_GE, ir);
-        } else {
-          cmp_and_setcc(&cx, CC_AE, ir);
-        }
+        x64_ConditionCode cc =
+            use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_GE : CC_AE;
+        cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_LT: {
         assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
-        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
-          cmp_and_setcc(&cx, CC_L, ir);
-        } else {
-          cmp_and_setcc(&cx, CC_B, ir);
-        }
+        x64_ConditionCode cc =
+            use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_L : CC_B;
+        cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_LTEQ: {
         assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
-        if (type_is_signed(ir_val_c_type(&cx, ir->r1))) {
-          cmp_and_setcc(&cx, CC_LE, ir);
-        } else {
-          cmp_and_setcc(&cx, CC_BE, ir);
-        }
+        x64_ConditionCode cc =
+            use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_LE : CC_BE;
+        cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_EQ: {
@@ -560,16 +829,20 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_DIV: {
-        // do Idiv and return ax
-        divide(&cx, ir);
-        x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Type type = asm_type_of(&cx, ir);
-        mov(&cx, reg(REG_AX), dst, type);
+        if (type == X64_TY_DOUBLE) {
+          binary(&cx, X64_DIV_DOUBLE, ir);
+        } else {
+          // do integer division and return ax
+          divide_int(&cx, ir);
+          x64_Operand* dst = to_x64_op(&cx, ir->dst);
+          mov(&cx, reg(REG_AX), dst, type);
+        }
         break;
       }
       case IR_REM: {
         // do Idiv and return dx
-        divide(&cx, ir);
+        divide_int(&cx, ir);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Type type = asm_type_of(&cx, ir);
         mov(&cx, reg(REG_DX), dst, type);
@@ -580,12 +853,14 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_JZ: {
-        cmp(&cx, &ZERO, to_x64_op(&cx, ir->r1), asm_type_of(&cx, ir));
+        binary_inner(&cx, X64_CMP, zero(&cx, ir_val_c_type(&cx, ir->r1)),
+                     to_x64_op(&cx, ir->r1), asm_type_of(&cx, ir));
         jmpcc(&cx, CC_E, ir->label);
         break;
       }
       case IR_JNZ: {
-        cmp(&cx, &ZERO, to_x64_op(&cx, ir->r1), asm_type_of(&cx, ir));
+        binary_inner(&cx, X64_CMP, zero(&cx, ir_val_c_type(&cx, ir->r1)),
+                     to_x64_op(&cx, ir->r1), asm_type_of(&cx, ir));
         jmpcc(&cx, CC_NE, ir->label);
         break;
       }
@@ -620,66 +895,126 @@ static x64_Function* convert_function(IrFunction* ir_function,
         break;
       }
       case IR_ZERO_EXTEND: {
-        assert(ir->r1);
-        assert(ir->dst);
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
-        x64_Type type = ir_val_to_asm_type(&cx, ir->r1);
+        x64_Type src_type = ir_val_to_asm_type(&cx, ir->r1);
+        x64_Type dst_type = ir_val_to_asm_type(&cx, ir->dst);
+        zero_extend(&cx, src, dst, src_type, dst_type);
+        break;
+      }
+      case IR_DOUBLE_TO_INT: {
+        assert(ir_val_c_type(&cx, ir->r1) == TYPE_DOUBLE);
 
-        if (dst->ty == X64_OP_REG) {
-          mov(&cx, src, dst, type);
-        } else {
-          x64_Type dst_type = ir_val_to_asm_type(&cx, ir->dst);
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
 
-          // Note that each R11 has different types here.
-          // TODO: I bet I can remove the types from each individual register
-          // and rely on the instruction type instead.
-          mov(&cx, src, reg(REG_R11), type);
-          mov(&cx, reg(REG_R11), dst, dst_type);
+        // In this case, the type of dst (signed integer) determines the type of
+        // the instruction.
+        x64_Type type = ir_val_to_asm_type(&cx, ir->dst);
+        cvttsd2si(&cx, src, dst, type);
+        break;
+      }
+      case IR_DOUBLE_TO_UINT: {
+        assert(ir_val_c_type(&cx, ir->r1) == TYPE_DOUBLE);
+
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+
+        if (ir_val_c_type(&cx, ir->dst) == TYPE_UINT) {
+          // If converting to a uint, then convert to a signed long
+          // If the double we're converting from is outside the range of a uint
+          // (e.g. negative), then behavior is undefined so anything can happen.
+          cvttsd2si(&cx, src, dst, X64_TY_QUADWORD);
+          break;
         }
+
+        // Compare against LONG_MAX + 1 to determine how to convert the double
+        const double upper_bound_val = 9223372036854775808.0;
+        x64_Operand* upper_bound =
+            data(double_const(&cx, upper_bound_val, 8), true);
+        binary_inner(&cx, X64_CMP, upper_bound, src, X64_TY_DOUBLE);
+
+        static int n = 0;
+        String* out_of_range = string_format(".D2UI_OUT_OF_RANGE_%d", n++);
+        String* end = string_format(".D2UI_END_%d", n++);
+
+        jmpcc(&cx, CC_AE, out_of_range);
+
+        // If we're in range, we can convert directly using cvtsd2si
+        cvttsd2si(&cx, src, dst, X64_TY_QUADWORD);
+        jmp(&cx, end);
+
+        // If we're out of range, subtract the upper bound then convert, then
+        // add back the upper bound as a ULONG.
+        label(&cx, out_of_range);
+        x64_Operand* xmm1 = reg(REG_XMM1);
+        mov(&cx, src, xmm1, X64_TY_DOUBLE);
+        binary_inner(&cx, X64_SUB, upper_bound, xmm1, X64_TY_DOUBLE);
+
+        cvttsd2si(&cx, xmm1, dst, X64_TY_QUADWORD);
+        binary_inner(&cx, X64_ADD, imm((uint64_t)LONG_MAX + 1, TYPE_ULONG), dst,
+                     X64_TY_QUADWORD);
+
+        label(&cx, end);
+        break;
+      }
+      case IR_INT_TO_DOUBLE: {
+        assert(ir_val_c_type(&cx, ir->dst) == TYPE_DOUBLE);
+
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+
+        // In this case, the type of r1 (long or int) determines the type of the
+        // instruction.
+        x64_Type type = ir_val_to_asm_type(&cx, ir->r1);
+        cvtsi2sd(&cx, src, dst, type);
+        break;
+      }
+      case IR_UINT_TO_DOUBLE: {
+        assert(ir_val_c_type(&cx, ir->dst) == TYPE_DOUBLE);
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+        x64_Type src_type = ir_val_to_asm_type(&cx, ir->r1);
+        CType src_c_type = ir_val_c_type(&cx, ir->r1);
+
+        if (ir_val_c_type(&cx, ir->r1) == TYPE_UINT) {
+          // Similar to double to UINT. Zero extend to a signed long then
+          // convert.
+          x64_Operand* ax = reg(REG_AX);
+          zero_extend(&cx, src, ax, src_type, X64_TY_QUADWORD);
+          cvtsi2sd(&cx, ax, dst, X64_TY_QUADWORD);
+          break;
+        }
+
+        static int n = 0;
+        String* out_of_range = string_format(".UI2D_OUT_OF_RANGE_%d", n++);
+        String* end = string_format(".UI2D_END_%d", n++);
+
+        binary_inner(&cx, X64_CMP, zero(&cx, src_c_type), src, src_type);
+        jmpcc(&cx, CC_L, out_of_range);
+        cvtsi2sd(&cx, src, dst, src_type);
+        jmp(&cx, end);
+        label(&cx, out_of_range);
+
+        if (src->ty != X64_OP_REG) {
+          x64_Operand* ax = reg(REG_AX);
+          mov(&cx, src, ax, src_type);
+          src = ax;
+        }
+
+        assert(src->reg != REG_DX);
+        x64_Operand* dx = reg(REG_DX);
+        mov(&cx, src, dx, src_type);
+        instr1(&cx, X64_SHR, dx, src_type);
+        instr2(&cx, X64_AND, imm(1, src_c_type), src, src_type);
+        instr2(&cx, X64_OR, src, dx, src_type);
+        cvtsi2sd(&cx, dx, dst, src_type);
+        binary_inner(&cx, X64_ADD, dst, dst, X64_TY_DOUBLE);
+        label(&cx, end);
         break;
       }
       case IR_FN_CALL: {
-        int stack_to_dealloc = 0;
-        // adjust stack if we have an odd number of arguments.
-        // The x64 stack must be 16 byte aligned.
-        if (ir->args->len > kNumArgumentRegs && (ir->args->len % 2)) {
-          instr2(&cx, X64_SUB, imm(8, TYPE_ULONG), reg(REG_SP),
-                 X64_TY_QUADWORD);
-          stack_to_dealloc += 8;
-        }
-
-        // pass first 6 arguments in registers
-        for (size_t i = 0; (i < kNumArgumentRegs) && (i < ir->args->len); i++) {
-          IrVal* val = vec_get(ir->args, i);
-          x64_Type type = ir_val_to_asm_type(&cx, val);
-          x64_Operand* arg = to_x64_op(&cx, val);
-          x64_Operand* x64_reg = reg(kArgumentRegs[i]);
-          mov(&cx, arg, x64_reg, type);
-        }
-
-        // pass remaining arguments onto the stack in reverse.
-        if (ir->args->len > kNumArgumentRegs) {
-          for (size_t i = ir->args->len - 1; i >= kNumArgumentRegs; i--) {
-            IrVal* val = vec_get(ir->args, i);
-            x64_Type type = ir_val_to_asm_type(&cx, val);
-            x64_Operand* arg = to_x64_op(&cx, val);
-
-            // Note: push will ignore types, but we use them here for
-            // convenience.
-            if (arg->ty == X64_OP_IMM || arg->ty == X64_OP_REG ||
-                type == X64_TY_QUADWORD) {
-              push(&cx, arg, type);
-            } else {
-              x64_Operand* rax = reg(REG_AX);
-              mov(&cx, arg, rax, type);
-              push(&cx, rax, type);
-            }
-            // must deallocate stack reserved for arguments pushed onto the
-            // stack.
-            stack_to_dealloc += 8;
-          }
-        }
+        int stack_to_dealloc = prepare_fn_call(&cx, ir);
 
         // Call the function
         x64_Instruction call = {
@@ -697,7 +1032,8 @@ static x64_Function* convert_function(IrFunction* ir_function,
         // Move the return value in RAX to the call's destination.
         x64_Type type = ir_val_to_asm_type(&cx, ir->dst);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
-        mov(&cx, reg(REG_AX), dst, type);
+        x64_Operand* ret = type == X64_TY_DOUBLE ? reg(REG_XMM0) : reg(REG_AX);
+        mov(&cx, ret, dst, type);
         break;
       }
       default:
@@ -737,28 +1073,38 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
       break;
     case TYPE_LONG:
     case TYPE_ULONG:
+    case TYPE_DOUBLE:
       ret->alignment = 8;
       break;
-    default:
+    case TYPE_NONE:
       assert(false);
   }
   assert(ret->init.ty != INIT_TENTATIVE);
   return ret;
 }
 
-x64_Program* generate_x86(IrProgram* ast_program) {
+x64_Program* generate_x64(IrProgram* ast_program) {
   x64_Program* x64_prog = calloc(1, sizeof(x64_Program));
   x64_prog->functions = vec_new(sizeof(x64_Function));
   x64_prog->static_variables = vec_new(sizeof(x64_StaticVariable));
+  x64_prog->static_constants = vec_new(sizeof(x64_StaticConst));
+
+  StaticConstContext static_consts = {
+      .out = x64_prog->static_constants, .map = hashmap_new(), .num = 0};
+
+  // Generate function bodies
   vec_for_each(ast_program->functions, IrFunction, ir_func) {
-    x64_Function* f = convert_function(iter.ir_func, ast_program->symbol_table);
+    x64_Function* f = convert_function(iter.ir_func, ast_program->symbol_table,
+                                       &static_consts);
     vec_push(x64_prog->functions, f);
   }
 
+  // Generate static variables
   vec_for_each(ast_program->static_variables, IrStaticVariable,
                ir_static_variable) {
     vec_push(x64_prog->static_variables,
              convert_static_variable(iter.ir_static_variable));
   }
+
   return x64_prog;
 }

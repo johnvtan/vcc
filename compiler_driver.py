@@ -10,14 +10,16 @@ if __name__ == '__main__':
     parser.add_argument("--validate", help="Run up to validation", action="store_true")
     parser.add_argument("--tacky", help="Run up to tacky", action="store_true")
     parser.add_argument("--codegen", help="Run up to codegen", action="store_true")
+    parser.add_argument("--dump", help="Dump at requested stage", action="store_true")
     parser.add_argument("-S", "--asm_file", help="assembly file", action="store_true")
     parser.add_argument("-c", "--no_linker", help="run without linker", action="store_true")
+    parser.add_argument("-l", "--link", help="link to a library", action="append", type=str)
     parser.add_argument("input_file", help="File to compiler")
 
     args = parser.parse_args()
     print(args.input_file)
 
-    basename, ext = args.input_file.split('.')
+    basename, ext = args.input_file.rsplit('.', maxsplit=1)
     if ext != 'c':
         print('Must be a .c file')
         exit(1)
@@ -37,6 +39,12 @@ if __name__ == '__main__':
     elif args.tacky: vcc_cli_arg = "--tacky"
     elif args.codegen: vcc_cli_arg = "--codegen"
     else: emit = True
+    if args.dump: vcc_cli_arg += " --dump"
+
+    link_to = ""
+    if not args.no_linker and args.link:
+        for link in args.link:
+            link_to += f"-l{link} "
 
     try:
         run(f'./bin/vcc {vcc_cli_arg} {pp_file.name} {asm_file}', check=True, shell=True)
@@ -44,5 +52,5 @@ if __name__ == '__main__':
         exit(e.returncode)
 
     if emit:
-        run(f'gcc  {"-c" if args.no_linker else ""} {asm_file} -o {basename}{".o" if args.no_linker else ""}',
+        run(f'gcc  {"-c" if args.no_linker else ""} {asm_file} -o {basename}{".o" if args.no_linker else ""} {link_to}',
                 check=True, shell=True)

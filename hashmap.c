@@ -166,6 +166,9 @@ void hashmap_put(Hashmap* h, String* key, void* value) {
   e->key = key;
   e->state = VALID;
   e->value = value;
+
+  // TODO: is this a bug? We shouldn't increment nitems if we're updating an
+  // existing value, right?
   h->nitems++;
 }
 

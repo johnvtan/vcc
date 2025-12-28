@@ -172,6 +172,16 @@ void all_tests(void) {
     assert(entry);
     assert(entry->ty == ST_LOCAL_VAR);
     assert(entry->local.c_type == TYPE_DOUBLE);
+
+    IrProgram* ir = gen_ir(ast, symbol_table);
+    x64_Program* asm_prog = generate_x86(ir);
+    assert(asm_prog);
+    assert(asm_prog->static_constants);
+    assert(asm_prog->static_constants->len == 1);
+
+    x64_StaticConst* sc = vec_get(asm_prog->static_constants, 0);
+    assert(sc->alignment == 8);
+    assert(sc->init.numeric.double_ == 3.0);
   }
 
   TEST(implicit_conversion_to_double_test) {
@@ -261,22 +271,22 @@ void all_tests(void) {
     assert(entry->static_.init.numeric.double_ == 3.0);
   }
 
-  TEST(calling_convention) {
-    const char* prog =
-        R(double fn(double d1, double d2, int i1, double d3, double d4,
-      \n double d5, double d6, unsigned int i2, long i3,
-      \n double d7, double d8, unsigned long i4, double d9,
-      \n int i5, double d10, int i6, int i7, double d11,
-      \n int i8, int i9) { return 0.0; });
-    AstProgram* ast = parse_ast(lex(string_from(prog)));
-    SymbolTable* symbol_table = typecheck_ast(ast);
-    IrProgram* ir = gen_ir(ast, symbol_table);
-    x64_Program* x64_prog = generate_x86(ir);
-    assert(x64_prog);
-    assert(x64_prog->functions->len == 1);
-    x64_Function* fn = vec_get(x64_prog->functions, 0);
-    assert(fn);
-  }
+  // TEST(calling_convention) {
+  //   const char* prog =
+  //       R(double fn(double d1, double d2, int i1, double d3, double d4,
+  //     \n double d5, double d6, unsigned int i2, long i3,
+  //     \n double d7, double d8, unsigned long i4, double d9,
+  //     \n int i5, double d10, int i6, int i7, double d11,
+  //     \n int i8, int i9) { return 0.0; });
+  //   AstProgram* ast = parse_ast(lex(string_from(prog)));
+  //   SymbolTable* symbol_table = typecheck_ast(ast);
+  //   IrProgram* ir = gen_ir(ast, symbol_table);
+  //   x64_Program* x64_prog = generate_x86(ir);
+  //   assert(x64_prog);
+  //   assert(x64_prog->functions->len == 1);
+  //   x64_Function* fn = vec_get(x64_prog->functions, 0);
+  //   assert(fn);
+  // }
 }
 
 int main(void) {

@@ -24,11 +24,25 @@ typedef enum {
   REG_R10,
   REG_R11,
   REG_SP,
+
+  // Note: SSE registers should always come after general purpose registers.
+  // It's easier to validate whether a register is a GP or SSE reg that way.
+  REG_XMM0,
+  REG_XMM1,
+  REG_XMM2,
+  REG_XMM3,
+  REG_XMM4,
+  REG_XMM5,
+  REG_XMM6,
+  REG_XMM7,
+  REG_XMM14,
+  REG_XMM15,
 } x64_RegType;
 
 typedef enum {
   X64_TY_QUADWORD,
   X64_TY_LONGWORD,
+  X64_TY_DOUBLE,
 } x64_Type;
 
 typedef struct {
@@ -45,6 +59,9 @@ typedef struct {
 
   // X64_OP_LABEL or X64_OP_DATA
   String* ident;
+
+  // X64_OP_DATA
+  bool is_constant;
 } x64_Operand;
 
 typedef enum {
@@ -66,6 +83,13 @@ typedef enum {
   X64_LABEL,
   X64_PUSH,
   X64_CALL,
+  X64_CVTTSD2SI,
+  X64_CVTSI2SD,
+  X64_DIV_DOUBLE,
+  X64_SHR,  // shift right
+  X64_XOR,
+  X64_AND,  // bitwise and
+  X64_OR,   // bitwise or
 } x64_InstructionType;
 
 typedef enum {
@@ -119,14 +143,25 @@ typedef struct {
   int alignment;
 } x64_StaticVariable;
 
+// These are constants generated internally by the compiler.
+// Currently they're always doubles that are stored in the rodata section.
+typedef struct {
+  String* name;
+  StaticInit init;
+  int alignment;
+} x64_StaticConst;
+
 typedef struct {
   // Vec<X64_Function*>
   Vec* functions;
 
   // Vec<x64_StaticVariable>
   Vec* static_variables;
+
+  // Vec<x64_StaticConst>
+  Vec* static_constants;
 } x64_Program;
 
-x64_Program* generate_x86(IrProgram* ir_program);
+x64_Program* generate_x64(IrProgram* ir_program);
 
 #endif  // VCC_GEN_X64_H

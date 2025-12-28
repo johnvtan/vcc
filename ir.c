@@ -127,14 +127,22 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr);
 static CompTimeConst one(CType c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  ret.numeric.int_ = 1;
+  if (type_is_integer(c_type)) {
+    ret.numeric.int_ = 1;
+  } else {
+    ret.numeric.double_ = 1.0;
+  }
   return ret;
 }
 
-CompTimeConst zero(CType c_type) {
+static CompTimeConst zero(CType c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  ret.numeric.int_ = 0;
+  if (type_is_integer(c_type)) {
+    ret.numeric.int_ = 0;
+  } else {
+    ret.numeric.double_ = 0.0;
+  }
   return ret;
 }
 
@@ -171,23 +179,25 @@ static IrVal* gen_unary(Context* cx, AstExpr* expr) {
   }
 
   // General case for unary --> generate an IR unary
-  IrType unary_op = IR_UNKNOWN;
+  IrVal* dst = temp(cx, expr->c_type);
   switch (expr->unary.op) {
     case UNARY_COMPLEMENT:
-      unary_op = IR_UNARY_COMPLEMENT;
-      break;
+      push_inst(cx->out, unary(IR_UNARY_COMPLEMENT, operand, dst));
+      return dst;
     case UNARY_NEG:
-      unary_op = IR_UNARY_NEG;
-      break;
-    case UNARY_NOT:
-      unary_op = IR_UNARY_NOT;
-      break;
+      push_inst(cx->out, unary(IR_UNARY_NEG, operand, dst));
+      return dst;
+    case UNARY_NOT: {
+      // rewrite UNARY_NOT to be cmp 0, r1
+      // Note: be careful to use the inner c_type here to ensure that types are
+      // consistent.
+      push_inst(cx->out, binary(IR_EQ, constant(zero(expr->unary.expr->c_type)),
+                                operand, dst));
+      return dst;
+    }
     default:
       panic("Unexpected AstFact type: %lu", expr->unary.op);
   }
-  IrVal* dst = temp(cx, expr->c_type);
-  push_inst(cx->out, unary(unary_op, operand, dst));
-  return dst;
 }
 
 static IrVal* gen_binary(Context* cx, AstExpr* expr) {

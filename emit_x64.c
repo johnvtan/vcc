@@ -17,6 +17,8 @@
 #error "Only MacOS and linux are supported"
 #endif
 
+#define TO_STDOUT 0
+
 //
 // Context for emitting code.
 //
@@ -27,9 +29,18 @@ typedef struct {
 static void emit(Context* cx, const char* fmt, ...) {
   va_list args;
   va_start(args, fmt);
+
+#if !TO_STDOUT
   vfprintf(cx->fp, fmt, args);
+#else
+  vprintf(fmt, args);
+#endif
   va_end(args);
 }
+
+bool is_sse_reg(x64_RegType reg) { return reg >= REG_XMM0; }
+
+bool is_gp_reg(x64_RegType reg) { return reg < REG_XMM0; }
 
 static void emit_operand(Context* cx, const x64_Operand* op, x64_Type type) {
   switch (op->ty) {
@@ -45,7 +56,16 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Type type) {
     }
     case X64_OP_REG: {
       const char* reg_str = NULL;
-      if (type == X64_TY_QUADWORD) {
+      if (is_sse_reg(op->reg)) {
+        static const char* reg_map[] = {
+            [REG_XMM0] = "xmm0",   [REG_XMM1] = "xmm1", [REG_XMM2] = "xmm2",
+            [REG_XMM3] = "xmm3",   [REG_XMM4] = "xmm4", [REG_XMM5] = "xmm5",
+            [REG_XMM6] = "xmm6",   [REG_XMM7] = "xmm7", [REG_XMM14] = "xmm14",
+            [REG_XMM15] = "xmm15",
+        };
+        reg_str = reg_map[op->reg];
+      } else if (type == X64_TY_QUADWORD) {
+        assert(is_gp_reg(op->reg));
         static const char* reg_map[] = {
             [REG_AX] = "rax", [REG_DX] = "rdx",  [REG_DI] = "rdi",
             [REG_CX] = "rcx", [REG_SI] = "rsi",  [REG_R8] = "r8",
@@ -54,6 +74,7 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Type type) {
         };
         reg_str = reg_map[op->reg];
       } else if (type == X64_TY_LONGWORD) {
+        assert(is_gp_reg(op->reg));
         static const char* reg_map[] = {
             [REG_AX] = "eax", [REG_DX] = "edx",   [REG_DI] = "edi",
             [REG_CX] = "ecx", [REG_SI] = "esi",   [REG_R8] = "r8d",
@@ -61,7 +82,9 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Type type) {
             [REG_SP] = "rsp",
         };
         reg_str = reg_map[op->reg];
-      } else {
+      }
+
+      if (reg_str == NULL) {
         panic("Unexpected reg op type %u", type);
       }
       emit(cx, "%%%s", reg_str);
@@ -76,7 +99,12 @@ static void emit_operand(Context* cx, const x64_Operand* op, x64_Type type) {
       break;
     }
     case X64_OP_DATA: {
-      emit(cx, ASM_SYMBOL_PREFIX "%s(%%rip)", cstring(op->ident));
+      if (op->is_constant) {
+        emit(cx, LOCAL_LABEL_PREFIX);
+      } else {
+        emit(cx, ASM_SYMBOL_PREFIX);
+      }
+      emit(cx, "%s(%%rip)", cstring(op->ident));
       break;
     }
     default:
@@ -90,6 +118,8 @@ static const char* asm_type_to_suffix(x64_Type type) {
       return "l";
     case X64_TY_QUADWORD:
       return "q";
+    case X64_TY_DOUBLE:
+      return "sd";
     default:
       panic("Unhandled asm type %u", type);
   }
@@ -174,11 +204,13 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       break;
     }
     case X64_MUL: {
-      emit2(cx, "imul", inst->r1, inst->r2, inst->asm_type);
+      const char* mul = inst->asm_type == X64_TY_DOUBLE ? "mul" : "imul";
+      emit2(cx, mul, inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_CMP: {
-      emit2(cx, "cmp", inst->r1, inst->r2, inst->asm_type);
+      const char* cmp = inst->asm_type == X64_TY_DOUBLE ? "comi" : "cmp";
+      emit2(cx, cmp, inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_IDIV: {
@@ -195,6 +227,14 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       } else {
         emit(cx, "\tcdq\n");
       }
+      break;
+    }
+    case X64_CVTTSD2SI: {
+      emit2(cx, "cvttsd2si", inst->r1, inst->r2, inst->asm_type);
+      break;
+    }
+    case X64_CVTSI2SD: {
+      emit2(cx, "cvtsi2sd", inst->r1, inst->r2, inst->asm_type);
       break;
     }
     case X64_JMP: {
@@ -237,9 +277,33 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       emit(cx, "\n");
       break;
     }
-    default:
-      emit_error_no_pos("Unrecognized x64 instruction %lu", inst->ty);
-      assert(false);
+    case X64_AND: {
+      emit2(cx, "and", inst->r1, inst->r2, inst->asm_type);
+      break;
+    }
+    case X64_OR: {
+      emit2(cx, "or", inst->r1, inst->r2, inst->asm_type);
+      break;
+    }
+    case X64_XOR: {
+      // XOR only supported for doubles right now
+      assert(inst->asm_type == X64_TY_DOUBLE);
+      emit(cx, "\txorpd ");
+      emit_operand(cx, inst->r1, inst->asm_type);
+      emit(cx, ", ");
+      emit_operand(cx, inst->r2, inst->asm_type);
+      emit(cx, "\n");
+      break;
+    }
+    case X64_SHR: {
+      emit1(cx, "shr", inst->r1, inst->asm_type);
+      break;
+    }
+    case X64_DIV_DOUBLE: {
+      assert(inst->asm_type == X64_TY_DOUBLE);
+      emit2(cx, "div", inst->r1, inst->r2, inst->asm_type);
+      break;
+    }
   }
 }
 
@@ -254,12 +318,36 @@ static void emit_function(Context* cx, x64_Function* fn) {
   }
 }
 
+// TODO: I probably shouldn't be propagating C types all the way back here?
+static void emit_numeric_value(Context* cx, CType c_type, NumericValue val) {
+  switch (c_type) {
+    case TYPE_INT:
+      emit(cx, "\t.long %d\n", (int)val.int_);
+      break;
+    case TYPE_LONG:
+      emit(cx, "\t.quad %ld\n", (long)val.int_);
+      break;
+    case TYPE_UINT:
+      emit(cx, "\t.long %u\n", (unsigned int)val.int_);
+      break;
+    case TYPE_ULONG:
+      emit(cx, "\t.quad %lu\n", (unsigned long)val.int_);
+      break;
+    case TYPE_DOUBLE:
+      // 17 decimal points is enough to guarantee round trip conversion.
+      emit(cx, "\t.double %.17e\n", val.double_);
+      break;
+    default:
+      assert(false);
+  }
+}
+
 static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
   if (sv->global) {
     emit(cx, "\t.globl " ASM_SYMBOL_PREFIX "%s\n", cstring(sv->name));
   }
 
-  if (sv->init.numeric.int_ == 0) {
+  if (type_is_integer(sv->init.c_type) && sv->init.numeric.int_ == 0) {
     emit(cx, ".bss\n");
     emit(cx, "\t.balign %d\n", sv->alignment);
     emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
@@ -270,22 +358,15 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
   emit(cx, ".data\n");
   emit(cx, "\t.balign %d\n", sv->alignment);
   emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
-  switch (sv->init.c_type) {
-    case TYPE_INT:
-      emit(cx, "\t.long %d\n", (int)sv->init.numeric.int_);
-      break;
-    case TYPE_LONG:
-      emit(cx, "\t.quad %ld\n", (long)sv->init.numeric.int_);
-      break;
-    case TYPE_UINT:
-      emit(cx, "\t.long %u\n", (unsigned int)sv->init.numeric.int_);
-      break;
-    case TYPE_ULONG:
-      emit(cx, "\t.quad %lu\n", (unsigned long)sv->init.numeric.int_);
-      break;
-    default:
-      assert(false);
-  }
+  emit_numeric_value(cx, sv->init.c_type, sv->init.numeric);
+}
+
+static void emit_static_const(Context* cx, x64_StaticConst* sc) {
+  // TODO: fix for macos
+  emit(cx, ".section .rodata\n");
+  emit(cx, "\t.balign %d\n", sc->alignment);
+  emit(cx, LOCAL_LABEL_PREFIX "%s:\n", cstring(sc->name));
+  emit_numeric_value(cx, sc->init.c_type, sc->init.numeric);
 }
 
 int emit_x64(x64_Program* program, const char* outfile) {
@@ -299,6 +380,10 @@ int emit_x64(x64_Program* program, const char* outfile) {
 
   vec_for_each(program->static_variables, x64_StaticVariable, static_variable) {
     emit_static_variable(&cx, iter.static_variable);
+  }
+
+  vec_for_each(program->static_constants, x64_StaticConst, static_const) {
+    emit_static_const(&cx, iter.static_const);
   }
 
 #if __linux__
