@@ -40,16 +40,16 @@ typedef enum {
 } x64_RegType;
 
 typedef enum {
-  X64_TY_QUADWORD,
-  X64_TY_LONGWORD,
-  X64_TY_DOUBLE,
-} x64_Type;
+  X64_QUADWORD,
+  X64_LONGWORD,
+  X64_DOUBLE,
+} x64_DataType;
 
 typedef struct {
   x64_OperandType ty;
   // X64_OP_IMM
   uint64_t imm;
-  bool sign;
+  bool is_signed;
 
   // X64_OP_REG
   x64_RegType reg;
@@ -112,7 +112,7 @@ typedef enum {
 
 typedef struct {
   x64_InstructionType ty;
-  x64_Type asm_type;
+  x64_DataType data_type;
 
   // Most instruction types
   struct {

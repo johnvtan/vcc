@@ -176,11 +176,11 @@ static const char* x64_instr_type_to_string(x64_InstructionType type) {
   }
 }
 
-static const char* asm_type_to_string(x64_Type type) {
+static const char* asm_type_to_string(x64_DataType type) {
   switch (type) {
-    X(X64_TY_QUADWORD);
-    X(X64_TY_LONGWORD);
-    X(X64_TY_DOUBLE);
+    X(X64_QUADWORD);
+    X(X64_LONGWORD);
+    X(X64_DOUBLE);
   }
 }
 
@@ -227,7 +227,7 @@ static const char* cc_to_string(x64_ConditionCode cc) {
 void dump_operand(x64_Operand* op) {
   switch (op->ty) {
     case X64_OP_IMM: {
-      printf("{ IMM val=%lu sign=%u }", op->imm, op->sign);
+      printf("{ IMM val=%lu is_signed=%u }", op->imm, op->is_signed);
       break;
     }
     case X64_OP_REG: {
@@ -254,7 +254,7 @@ static void dump_x64_fn(x64_Function* fn) {
          fn->stack_size);
   vec_for_each(fn->instructions, x64_Instruction, inst) {
     printf("\t%s type=%s", x64_instr_type_to_string(iter.inst->ty),
-           asm_type_to_string(iter.inst->asm_type));
+           asm_type_to_string(iter.inst->data_type));
 
     if (iter.inst->ty == X64_SETCC || iter.inst->ty == X64_JMPCC) {
       printf(" cc=%s", cc_to_string(iter.inst->cc));
