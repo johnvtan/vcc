@@ -138,17 +138,23 @@ typedef struct {
 
 typedef struct {
   String* name;
-  bool global;
-  StaticInit init;
   int alignment;
+  bool global;
+
+  bool is_signed;
+  x64_DataType data_type;
+  NumericValue init_val;
 } x64_StaticVariable;
 
 // These are constants generated internally by the compiler.
 // Currently they're always doubles that are stored in the rodata section.
 typedef struct {
   String* name;
-  StaticInit init;
   int alignment;
+
+  bool is_signed;
+  x64_DataType data_type;
+  NumericValue init_val;
 } x64_StaticConst;
 
 typedef struct {

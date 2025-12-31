@@ -216,9 +216,8 @@ static String* double_const(Context* cx, double d, int align) {
     hashmap_put(cx->static_consts->map, double_as_string, static_const_ident);
 
     x64_StaticConst static_const = {.name = static_const_ident,
-                                    .init = {.ty = INIT_HAS_VALUE,
-                                             .c_type = {.ty = CTYPE_DOUBLE},
-                                             .numeric = {.double_ = d}},
+                                    .init_val = {.double_ = d},
+                                    .data_type = X64_DOUBLE,
                                     .alignment = align};
     vec_push(cx->static_consts->out, &static_const);
   }
@@ -1070,16 +1069,21 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
 }
 
 x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
+  assert(ir->init.ty != INIT_TENTATIVE);
   x64_StaticVariable* ret = calloc(1, sizeof(x64_StaticVariable));
   ret->name = ir->name;
   ret->global = ir->global;
-  ret->init = ir->init;
-  switch (ret->init.c_type.ty) {
+  ret->init_val = ir->init.numeric;
+  ret->data_type = c_to_data_type(ir->init.c_type);
+
+  switch (ir->init.c_type.ty) {
     case CTYPE_INT:
+      ret->is_signed = true;
     case CTYPE_UINT:
       ret->alignment = 4;
       break;
     case CTYPE_LONG:
+      ret->is_signed = true;
     case CTYPE_ULONG:
     case CTYPE_DOUBLE:
       ret->alignment = 8;
@@ -1087,7 +1091,6 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
     case CTYPE_NONE:
       assert(false);
   }
-  assert(ret->init.ty != INIT_TENTATIVE);
   return ret;
 }
 

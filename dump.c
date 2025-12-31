@@ -304,26 +304,43 @@ void dump_ir(IrProgram* ir) {
   }
 }
 
+void dump_x64_numeric(x64_DataType type, bool is_signed, NumericValue val) {
+  switch (type) {
+    case X64_DOUBLE: {
+      printf("%.10f, hex=%a", val.double_, val.double_);
+      break;
+    }
+    case X64_LONGWORD: {
+      if (is_signed) {
+        printf("%d\n", (int)val.int_);
+      } else {
+        printf("%u\n", (unsigned int)val.int_);
+      }
+      break;
+    }
+    case X64_QUADWORD: {
+      if (is_signed) {
+        printf("%ld\n", (long)val.int_);
+      } else {
+        printf("%lu\n", (unsigned long)val.int_);
+      }
+      break;
+    }
+  }
+}
+
 void dump_x64(x64_Program* prog) {
   printf("=====DUMP X64=======\n\n");
   if (prog->static_variables->len) {
     printf("Static variables:\n\n");
     vec_for_each(prog->static_variables, x64_StaticVariable, static_var) {
-      printf("Name: %s, global=%u, align=%u, init=",
+      printf("Name: %s, global=%u, align=%u, type=%s, init=",
              cstring(iter.static_var->name), iter.static_var->global,
-             iter.static_var->alignment);
-      switch (iter.static_var->init.ty) {
-        case INIT_NONE:
-          printf("none");
-          break;
-        case INIT_TENTATIVE:
-          printf("tentative");
-          break;
-        case INIT_HAS_VALUE:
-          dump_numeric(iter.static_var->init.c_type,
-                       iter.static_var->init.numeric);
-          break;
-      }
+             iter.static_var->alignment,
+             asm_type_to_string(iter.static_var->data_type));
+
+      dump_x64_numeric(iter.static_var->data_type, iter.static_var->is_signed,
+                       iter.static_var->init_val);
       printf("\n");
     }
     printf("\n");
@@ -332,20 +349,12 @@ void dump_x64(x64_Program* prog) {
   if (prog->static_constants->len) {
     printf("Static constants:\n\n");
     vec_for_each(prog->static_constants, x64_StaticConst, static_const) {
-      printf("Name: %s, align=%u, init=", cstring(iter.static_const->name),
-             iter.static_const->alignment);
-      switch (iter.static_const->init.ty) {
-        case INIT_NONE:
-          printf("none");
-          break;
-        case INIT_TENTATIVE:
-          printf("tentative");
-          break;
-        case INIT_HAS_VALUE:
-          dump_numeric(iter.static_const->init.c_type,
-                       iter.static_const->init.numeric);
-          break;
-      }
+      printf("Name: %s, align=%u, type=%s init=",
+             cstring(iter.static_const->name), iter.static_const->alignment,
+             asm_type_to_string(iter.static_const->data_type));
+      dump_x64_numeric(iter.static_const->data_type,
+                       iter.static_const->is_signed,
+                       iter.static_const->init_val);
       printf("\n");
     }
     printf("\n");

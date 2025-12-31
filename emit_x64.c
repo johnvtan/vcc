@@ -320,26 +320,30 @@ static void emit_function(Context* cx, x64_Function* fn) {
 }
 
 // TODO: I probably shouldn't be propagating C types all the way back here?
-static void emit_numeric_value(Context* cx, CType c_type, NumericValue val) {
-  switch (c_type.ty) {
-    case CTYPE_INT:
-      emit(cx, "\t.long %d\n", (int)val.int_);
-      break;
-    case CTYPE_LONG:
-      emit(cx, "\t.quad %ld\n", (long)val.int_);
-      break;
-    case CTYPE_UINT:
-      emit(cx, "\t.long %u\n", (unsigned int)val.int_);
-      break;
-    case CTYPE_ULONG:
-      emit(cx, "\t.quad %lu\n", (unsigned long)val.int_);
-      break;
-    case CTYPE_DOUBLE:
+static void emit_numeric_value(Context* cx, x64_DataType type, bool is_signed,
+                               NumericValue val) {
+  switch (type) {
+    case X64_DOUBLE: {
       // 17 decimal points is enough to guarantee round trip conversion.
       emit(cx, "\t.double %.17e\n", val.double_);
       break;
-    default:
-      assert(false);
+    }
+    case X64_LONGWORD: {
+      if (is_signed) {
+        emit(cx, "\t.long %d\n", (int)val.int_);
+      } else {
+        emit(cx, "\t.long %u\n", (unsigned int)val.int_);
+      }
+      break;
+    }
+    case X64_QUADWORD: {
+      if (is_signed) {
+        emit(cx, "\t.quad %ld\n", (long)val.int_);
+      } else {
+        emit(cx, "\t.quad %lu\n", (unsigned long)val.int_);
+      }
+      break;
+    }
   }
 }
 
@@ -348,10 +352,12 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
     emit(cx, "\t.globl " ASM_SYMBOL_PREFIX "%s\n", cstring(sv->name));
   }
 
-  if (type_is_integer(sv->init.c_type) && sv->init.numeric.int_ == 0) {
+  if (sv->data_type != X64_DOUBLE && sv->init_val.int_ == 0) {
     emit(cx, ".bss\n");
     emit(cx, "\t.balign %d\n", sv->alignment);
     emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
+
+    // TODO: shouldn't we put the size here? this doesn't seem right..
     emit(cx, "\t.zero %d\n", sv->alignment);
     return;
   }
@@ -359,7 +365,7 @@ static void emit_static_variable(Context* cx, x64_StaticVariable* sv) {
   emit(cx, ".data\n");
   emit(cx, "\t.balign %d\n", sv->alignment);
   emit(cx, ASM_SYMBOL_PREFIX "%s:\n", cstring(sv->name));
-  emit_numeric_value(cx, sv->init.c_type, sv->init.numeric);
+  emit_numeric_value(cx, sv->data_type, sv->is_signed, sv->init_val);
 }
 
 static void emit_static_const(Context* cx, x64_StaticConst* sc) {
@@ -367,7 +373,7 @@ static void emit_static_const(Context* cx, x64_StaticConst* sc) {
   emit(cx, ".section .rodata\n");
   emit(cx, "\t.balign %d\n", sc->alignment);
   emit(cx, LOCAL_LABEL_PREFIX "%s:\n", cstring(sc->name));
-  emit_numeric_value(cx, sc->init.c_type, sc->init.numeric);
+  emit_numeric_value(cx, sc->data_type, sc->is_signed, sc->init_val);
 }
 
 int emit_x64(x64_Program* program, const char* outfile) {
