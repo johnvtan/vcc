@@ -12,14 +12,18 @@ typedef struct AstExpr AstExpr;
 // AST type definition
 //
 
-typedef enum CType {
-  TYPE_NONE = 0,  // used for catching errors
-  TYPE_INT,
-  TYPE_LONG,
-  TYPE_UINT,
-  TYPE_ULONG,
-  TYPE_DOUBLE,
+typedef struct {
+  enum {
+    CTYPE_NONE = 0,  // used for catching errors
+    CTYPE_INT,
+    CTYPE_LONG,
+    CTYPE_UINT,
+    CTYPE_ULONG,
+    CTYPE_DOUBLE,
+  } ty;
 } CType;
+
+static inline bool c_type_eq(CType c1, CType c2) { return c1.ty == c2.ty; }
 
 typedef union {
   uint64_t int_;

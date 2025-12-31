@@ -248,18 +248,18 @@ static IrVal* gen_binary(Context* cx, AstExpr* expr) {
 }
 
 static IrVal* ir_cast(Context* cx, IrVal* val, CType from, CType to) {
-  if (from == to) {
+  if (c_type_eq(from, to)) {
     return val;
   }
 
   IrVal* dst = temp(cx, to);
-  if (from == TYPE_DOUBLE && type_is_integer(to)) {
+  if (from.ty == CTYPE_DOUBLE && type_is_integer(to)) {
     IrType ty = type_is_signed(to) ? IR_DOUBLE_TO_INT : IR_DOUBLE_TO_UINT;
     push_inst(cx->out, unary(ty, val, dst));
     return dst;
   }
 
-  if (type_is_integer(from) && to == TYPE_DOUBLE) {
+  if (type_is_integer(from) && to.ty == CTYPE_DOUBLE) {
     IrType ty = type_is_signed(from) ? IR_INT_TO_DOUBLE : IR_UINT_TO_DOUBLE;
     push_inst(cx->out, unary(ty, val, dst));
     return dst;
@@ -337,7 +337,7 @@ static IrVal* gen_assign(Context* cx, AstExpr* expr) {
   CType lhs_type = expr->binary.lhs->c_type;
   CType rhs_type = expr->binary.rhs->c_type;
 
-  if (lhs_type != rhs_type) {
+  if (!c_type_eq(lhs_type, rhs_type)) {
     CType common_type = get_common_type(lhs_type, rhs_type);
 
     IrVal* intermediate_dst = temp(cx, common_type);

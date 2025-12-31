@@ -320,20 +320,20 @@ static void emit_function(Context* cx, x64_Function* fn) {
 
 // TODO: I probably shouldn't be propagating C types all the way back here?
 static void emit_numeric_value(Context* cx, CType c_type, NumericValue val) {
-  switch (c_type) {
-    case TYPE_INT:
+  switch (c_type.ty) {
+    case CTYPE_INT:
       emit(cx, "\t.long %d\n", (int)val.int_);
       break;
-    case TYPE_LONG:
+    case CTYPE_LONG:
       emit(cx, "\t.quad %ld\n", (long)val.int_);
       break;
-    case TYPE_UINT:
+    case CTYPE_UINT:
       emit(cx, "\t.long %u\n", (unsigned int)val.int_);
       break;
-    case TYPE_ULONG:
+    case CTYPE_ULONG:
       emit(cx, "\t.quad %lu\n", (unsigned long)val.int_);
       break;
-    case TYPE_DOUBLE:
+    case CTYPE_DOUBLE:
       // 17 decimal points is enough to guarantee round trip conversion.
       emit(cx, "\t.double %.17e\n", val.double_);
       break;

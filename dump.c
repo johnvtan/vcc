@@ -6,13 +6,13 @@
     return #n;
 
 static const char* c_type_to_string(CType type) {
-  switch (type) {
-    X(TYPE_NONE);
-    X(TYPE_INT);
-    X(TYPE_UINT);
-    X(TYPE_ULONG);
-    X(TYPE_DOUBLE);
-    X(TYPE_LONG);
+  switch (type.ty) {
+    X(CTYPE_NONE);
+    X(CTYPE_INT);
+    X(CTYPE_UINT);
+    X(CTYPE_ULONG);
+    X(CTYPE_DOUBLE);
+    X(CTYPE_LONG);
   }
 }
 
@@ -56,20 +56,20 @@ static const char* ir_type_to_string(IrType type) {
 
 static void dump_numeric(CType type, NumericValue val) {
   printf("%s, val=", c_type_to_string(type));
-  switch (type) {
-    case TYPE_INT:
+  switch (type.ty) {
+    case CTYPE_INT:
       printf("%d", (int)val.int_);
       break;
-    case TYPE_UINT:
+    case CTYPE_UINT:
       printf("%u", (unsigned int)val.int_);
       break;
-    case TYPE_LONG:
+    case CTYPE_LONG:
       printf("%ld", (long)val.int_);
       break;
-    case TYPE_ULONG:
+    case CTYPE_ULONG:
       printf("%lu", (unsigned long)val.int_);
       break;
-    case TYPE_DOUBLE:
+    case CTYPE_DOUBLE:
       printf("%.10f, hex=%a", val.double_, val.double_);
       break;
     default:

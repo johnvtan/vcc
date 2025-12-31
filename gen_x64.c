@@ -41,14 +41,14 @@ static int asm_type_to_size_bytes(x64_Type type) {
 }
 
 static x64_Type c_to_asm_type(CType c_type) {
-  switch (c_type) {
-    case TYPE_INT:
-    case TYPE_UINT:
+  switch (c_type.ty) {
+    case CTYPE_INT:
+    case CTYPE_UINT:
       return X64_TY_LONGWORD;
-    case TYPE_LONG:
-    case TYPE_ULONG:
+    case CTYPE_LONG:
+    case CTYPE_ULONG:
       return X64_TY_QUADWORD;
-    case TYPE_DOUBLE:
+    case CTYPE_DOUBLE:
       return X64_TY_DOUBLE;
     default:
       assert(false);
@@ -217,7 +217,7 @@ static String* double_const(Context* cx, double d, int align) {
 
     x64_StaticConst static_const = {.name = static_const_ident,
                                     .init = {.ty = INIT_HAS_VALUE,
-                                             .c_type = TYPE_DOUBLE,
+                                             .c_type = {.ty = CTYPE_DOUBLE},
                                              .numeric = {.double_ = d}},
                                     .alignment = align};
     vec_push(cx->static_consts->out, &static_const);
@@ -238,7 +238,7 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
     return imm(c.numeric.int_, c.c_type);
   }
 
-  assert(c.c_type == TYPE_DOUBLE);
+  assert(c.c_type.ty == CTYPE_DOUBLE);
   return data(double_const(cx, c.numeric.double_, 8), true);
 }
 
@@ -523,7 +523,7 @@ static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
 
 static void divide_int(Context* cx, IrInstruction* ir) {
   CType c_type = ir_val_c_type(cx, ir->r1);
-  assert(c_type == ir_val_c_type(cx, ir->r2));
+  assert(c_type_eq(c_type, ir_val_c_type(cx, ir->r2)));
 
   x64_Type type = asm_type_of(cx, ir);
   x64_Operand* r1 = to_x64_op(cx, ir->r1);
@@ -671,7 +671,8 @@ static int prepare_fn_call(Context* cx, IrInstruction* ir) {
   if (stack_args->len % 2) {
     // adjust stack if we have an odd number of arguments.
     // The x64 stack must be 16 byte aligned.
-    instr2(cx, X64_SUB, imm(8, TYPE_ULONG), reg(REG_SP), X64_TY_QUADWORD);
+    instr2(cx, X64_SUB, imm(8, (CType){.ty = CTYPE_ULONG}), reg(REG_SP),
+           X64_TY_QUADWORD);
     stack_to_dealloc += 8;
   }
 
@@ -761,7 +762,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         if (type_is_integer(ir_val_c_type(&cx, ir->r1))) {
           unary(&cx, X64_NEG, ir);
         } else {
-          assert(ir_val_c_type(&cx, ir->r1) == TYPE_DOUBLE);
+          assert(ir_val_c_type(&cx, ir->r1).ty == CTYPE_DOUBLE);
           x64_Type asm_type = asm_type_of(&cx, ir);
 
           // Must be 16 byte aligned for xorpd instruction.
@@ -793,28 +794,32 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_GT: {
-        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        assert(
+            c_type_eq(ir_val_c_type(&cx, ir->r1), ir_val_c_type(&cx, ir->r2)));
         x64_ConditionCode cc =
             use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_G : CC_A;
         cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_GTEQ: {
-        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        assert(
+            c_type_eq(ir_val_c_type(&cx, ir->r1), ir_val_c_type(&cx, ir->r2)));
         x64_ConditionCode cc =
             use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_GE : CC_AE;
         cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_LT: {
-        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        assert(
+            c_type_eq(ir_val_c_type(&cx, ir->r1), ir_val_c_type(&cx, ir->r2)));
         x64_ConditionCode cc =
             use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_L : CC_B;
         cmp_and_setcc(&cx, cc, ir);
         break;
       }
       case IR_LTEQ: {
-        assert(ir_val_c_type(&cx, ir->r1) == ir_val_c_type(&cx, ir->r2));
+        assert(
+            c_type_eq(ir_val_c_type(&cx, ir->r1), ir_val_c_type(&cx, ir->r2)));
         x64_ConditionCode cc =
             use_signed_cc(ir_val_c_type(&cx, ir->r1)) ? CC_LE : CC_BE;
         cmp_and_setcc(&cx, cc, ir);
@@ -903,7 +908,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_DOUBLE_TO_INT: {
-        assert(ir_val_c_type(&cx, ir->r1) == TYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->r1).ty == CTYPE_DOUBLE);
 
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
@@ -915,12 +920,12 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_DOUBLE_TO_UINT: {
-        assert(ir_val_c_type(&cx, ir->r1) == TYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->r1).ty == CTYPE_DOUBLE);
 
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
 
-        if (ir_val_c_type(&cx, ir->dst) == TYPE_UINT) {
+        if (ir_val_c_type(&cx, ir->dst).ty == CTYPE_UINT) {
           // If converting to a uint, then convert to a signed long
           // If the double we're converting from is outside the range of a uint
           // (e.g. negative), then behavior is undefined so anything can happen.
@@ -952,14 +957,15 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         binary_inner(&cx, X64_SUB, upper_bound, xmm1, X64_TY_DOUBLE);
 
         cvttsd2si(&cx, xmm1, dst, X64_TY_QUADWORD);
-        binary_inner(&cx, X64_ADD, imm((uint64_t)LONG_MAX + 1, TYPE_ULONG), dst,
-                     X64_TY_QUADWORD);
+        binary_inner(&cx, X64_ADD,
+                     imm((uint64_t)LONG_MAX + 1, (CType){.ty = CTYPE_ULONG}),
+                     dst, X64_TY_QUADWORD);
 
         label(&cx, end);
         break;
       }
       case IR_INT_TO_DOUBLE: {
-        assert(ir_val_c_type(&cx, ir->dst) == TYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->dst).ty == CTYPE_DOUBLE);
 
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
@@ -971,13 +977,13 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_UINT_TO_DOUBLE: {
-        assert(ir_val_c_type(&cx, ir->dst) == TYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->dst).ty == CTYPE_DOUBLE);
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_Type src_type = ir_val_to_asm_type(&cx, ir->r1);
         CType src_c_type = ir_val_c_type(&cx, ir->r1);
 
-        if (ir_val_c_type(&cx, ir->r1) == TYPE_UINT) {
+        if (ir_val_c_type(&cx, ir->r1).ty == CTYPE_UINT) {
           // Similar to double to UINT. Zero extend to a signed long then
           // convert.
           x64_Operand* ax = reg(REG_AX);
@@ -1025,8 +1031,9 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          instr2(&cx, X64_ADD, imm(stack_to_dealloc, TYPE_ULONG), reg(REG_SP),
-                 X64_TY_QUADWORD);
+          instr2(&cx, X64_ADD,
+                 imm(stack_to_dealloc, (CType){.ty = CTYPE_ULONG}),
+                 reg(REG_SP), X64_TY_QUADWORD);
         }
 
         // Move the return value in RAX to the call's destination.
@@ -1053,7 +1060,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
   x64_Instruction* alloc_stack = vec_get(ret->instructions, 0);
   *alloc_stack = (x64_Instruction){
       .ty = X64_SUB,
-      .r1 = imm(ret->stack_size, TYPE_ULONG),
+      .r1 = imm(ret->stack_size, (CType){.ty = CTYPE_ULONG}),
       .r2 = reg(REG_SP),
       .asm_type = X64_TY_QUADWORD,
   };
@@ -1066,17 +1073,17 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
   ret->name = ir->name;
   ret->global = ir->global;
   ret->init = ir->init;
-  switch (ret->init.c_type) {
-    case TYPE_INT:
-    case TYPE_UINT:
+  switch (ret->init.c_type.ty) {
+    case CTYPE_INT:
+    case CTYPE_UINT:
       ret->alignment = 4;
       break;
-    case TYPE_LONG:
-    case TYPE_ULONG:
-    case TYPE_DOUBLE:
+    case CTYPE_LONG:
+    case CTYPE_ULONG:
+    case CTYPE_DOUBLE:
       ret->alignment = 8;
       break;
-    case TYPE_NONE:
+    case CTYPE_NONE:
       assert(false);
   }
   assert(ret->init.ty != INIT_TENTATIVE);

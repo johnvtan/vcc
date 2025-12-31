@@ -219,7 +219,7 @@ static CType specs_to_ctype(Vec* specs) {
   if (double_counts) {
     // double must be the only specifier in the list.
     if (double_counts == 1 && specs->len == 1) {
-      return TYPE_DOUBLE;
+      return (CType){.ty = CTYPE_DOUBLE};
     } else {
       panic("Double found in specifier list with multiple specifiers: %u",
             double_counts);
@@ -239,10 +239,10 @@ static CType specs_to_ctype(Vec* specs) {
   }
 
   if (unsigned_counts) {
-    return long_counts ? TYPE_ULONG : TYPE_UINT;
+    return (CType){.ty = long_counts ? CTYPE_ULONG : CTYPE_UINT};
   }
 
-  return long_counts ? TYPE_LONG : TYPE_INT;
+  return (CType){.ty = long_counts ? CTYPE_LONG : CTYPE_INT};
 }
 
 typedef struct ParsedSpecifiers {
@@ -377,7 +377,7 @@ static AstExpr* parse_primary(ParseContext* cx) {
 
     char* endptr = NULL;
     const uint64_t parsed = strtoul(cstring(t.content), &endptr, 10);
-    CType c_type = TYPE_NONE;
+    CType c_type = {};
 
     if (is_signed) {
       if (parsed > LONG_MAX) {
@@ -387,9 +387,9 @@ static AstExpr* parse_primary(ParseContext* cx) {
       // For integer constants, we can implicitly decide that it's a long
       // constant if the parsed value is greater than INT_MAX.
       if (parsed <= INT_MAX && t.ty == TK_INT_CONST) {
-        c_type = TYPE_INT;
+        c_type.ty = CTYPE_INT;
       } else {
-        c_type = TYPE_LONG;
+        c_type.ty = CTYPE_LONG;
       }
     } else {
       if (endptr == cstring(t.content) && parsed == ULONG_MAX &&
@@ -401,9 +401,9 @@ static AstExpr* parse_primary(ParseContext* cx) {
       }
 
       if (parsed <= UINT_MAX && t.ty == TK_UINT_CONST) {
-        c_type = TYPE_UINT;
+        c_type.ty = CTYPE_UINT;
       } else {
-        c_type = TYPE_ULONG;
+        c_type.ty = CTYPE_ULONG;
       }
     }
 
@@ -430,8 +430,8 @@ static AstExpr* parse_primary(ParseContext* cx) {
 
     AstExpr* constant = expr(EXPR_CONST);
     constant->const_.numeric.double_ = d;
-    constant->c_type = TYPE_DOUBLE;
-    constant->const_.c_type = TYPE_DOUBLE;
+    constant->c_type.ty = CTYPE_DOUBLE;
+    constant->const_.c_type.ty = CTYPE_DOUBLE;
     return constant;
   }
 
