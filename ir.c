@@ -36,7 +36,7 @@ static IrVal* temp(Context* cx, CType* c_type) {
 
   SymbolTableEntry* st_entry = calloc(1, sizeof(SymbolTableEntry));
   st_entry->ty = ST_LOCAL_VAR;
-  st_entry->local.c_type = c_type;
+  st_entry->c_type = c_type;
   hashmap_put(cx->symbol_table->map, name, st_entry);
 
   // TODO: necessary?
@@ -719,8 +719,8 @@ static IrFunction* gen_function(AstDecl* ast_function, SymbolTable* st) {
   assert(st_entry && st_entry->ty == ST_FN);
   ir_function->global = st_entry->fn.global;
 
-  vec_for_each(ast_function->fn.params, AstFnParam, param) {
-    vec_push(ir_function->params, iter.param->ident);
+  vec_for_each(ast_function->fn.param_names, String, param) {
+    vec_push(ir_function->params, iter.param);
   }
 
   Context cx = {
@@ -732,8 +732,9 @@ static IrFunction* gen_function(AstDecl* ast_function, SymbolTable* st) {
   }
 
   // Always return 0 from every function
-  push_inst(ir_function->instructions,
-            unary_no_dst(IR_RET, constant(zero(st_entry->fn.return_type))));
+  push_inst(
+      ir_function->instructions,
+      unary_no_dst(IR_RET, constant(zero(st_entry->c_type->fn.return_type))));
   return ir_function;
 }
 
@@ -759,7 +760,7 @@ IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
     // zero it out to ensure that the value is zerod.
     memset(&ir_static_variable->init, 0, sizeof(ir_static_variable->init));
     ir_static_variable->init.ty = INIT_HAS_VALUE;
-    ir_static_variable->init.c_type = st_entry->static_.c_type;
+    ir_static_variable->init.c_type = st_entry->c_type;
   }
 
   return ir_static_variable;

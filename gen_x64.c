@@ -59,15 +59,7 @@ static CType* symbol_c_type(Context* cx, String* symbol) {
   assert(symbol);
   SymbolTableEntry* st_entry = hashmap_get(cx->symbol_table->map, symbol);
   assert(st_entry);
-
-  switch (st_entry->ty) {
-    case ST_LOCAL_VAR:
-      return st_entry->local.c_type;
-    case ST_STATIC_VAR:
-      return st_entry->static_.c_type;
-    case ST_FN:
-      assert(false);
-  }
+  return st_entry->c_type;
 }
 
 static CType* ir_val_c_type(Context* cx, IrVal* val) {
@@ -173,7 +165,7 @@ static x64_Operand* pseudo(Context* cx, String* name) {
     return data(name, false);
   }
 
-  x64_DataType type = c_to_data_type(st_entry->local.c_type);
+  x64_DataType type = c_to_data_type(st_entry->c_type);
   const int bytes = data_type_to_size_bytes(type);
   cx->stack_pos += bytes;
 
@@ -1085,6 +1077,7 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
       ret->alignment = 8;
       break;
     case CTYPE_NONE:
+    case CTYPE_FN:
       assert(false);
   }
   return ret;

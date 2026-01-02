@@ -57,6 +57,7 @@ static NumericValue cast_numeric_value(NumericValue val, CType* from,
         return (NumericValue){.int_ = (unsigned long)val.int_};
       case CTYPE_DOUBLE:
         return (NumericValue){.double_ = (double)val.int_};
+      case CTYPE_FN:
       case CTYPE_NONE:
         assert(false);
     }
@@ -73,6 +74,7 @@ static NumericValue cast_numeric_value(NumericValue val, CType* from,
         return (NumericValue){.int_ = (unsigned long)val.double_};
       case CTYPE_DOUBLE:
         return (NumericValue){.double_ = (double)val.double_};
+      case CTYPE_FN:
       case CTYPE_NONE:
         assert(false);
     }
@@ -132,9 +134,8 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
   // table or to check against the old entry if it exists.
   SymbolTableEntry new_entry = {
       .ty = ST_STATIC_VAR,
-      .static_ = {.c_type = decl->var.c_type,
-                  .global = decl->storage_class != SC_STATIC,
-                  .init = {}}};
+      .c_type = decl->c_type,
+      .static_ = {.global = decl->storage_class != SC_STATIC, .init = {}}};
 
   // check against old entry if it exists
   SymbolTableEntry* st_entry = hashmap_get(symbol_table->map, decl->var.name);
@@ -160,10 +161,9 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
           cstring(decl->var.name));
     }
 
-    if (!c_type_eq(st_entry->static_.c_type, decl->var.c_type)) {
+    if (!c_type_eq(st_entry->c_type, decl->c_type)) {
       panic("File scope variable %s has conflicting types %u vs %u",
-            cstring(decl->var.name), st_entry->static_.c_type,
-            decl->var.c_type);
+            cstring(decl->var.name), st_entry->c_type, decl->c_type);
     }
   }
 
@@ -171,8 +171,7 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
 
   // Build up new symbol table entry in case we have to add it to the symbol
   // table or to check against the old entry if it exists.
-  StaticVariableSymbol static_var = {.c_type = decl->var.c_type,
-                                     .global = decl->storage_class != SC_STATIC,
+  StaticVariableSymbol static_var = {.global = decl->storage_class != SC_STATIC,
                                      .init = {}};
 
   if (decl->var.init) {
@@ -182,8 +181,8 @@ static void typecheck_file_scope_variable_decl(Context* cx, AstDecl* decl) {
           "found %d",
           decl->var.init->ty);
     }
-    static_var.init = convert_static_init_to(to_static_init(decl->var.init),
-                                             decl->var.c_type);
+    static_var.init =
+        convert_static_init_to(to_static_init(decl->var.init), decl->c_type);
     static_var.init.ty = INIT_HAS_VALUE;
   } else if (decl->storage_class == SC_EXTERN) {
     static_var.init.ty = INIT_NONE;
@@ -224,10 +223,9 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
         panic("Function redeclared as variable %s", cstring(decl->var.name));
       }
 
-      if (!c_type_eq(st_entry->static_.c_type, decl->var.c_type)) {
+      if (!c_type_eq(st_entry->c_type, decl->c_type)) {
         panic("Variable %s has conflicting types: %u vs %u",
-              cstring(decl->var.name), st_entry->local.c_type,
-              decl->var.c_type);
+              cstring(decl->var.name), st_entry->c_type, decl->c_type);
       }
       return;
     }
@@ -240,9 +238,8 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
     // First declaration for extern variable.
     SymbolTableEntry new_entry = {
         .ty = ST_STATIC_VAR,
-        .static_ = {.c_type = decl->var.c_type,
-
-                    // extern variables are global even if they're declared at
+        .c_type = decl->c_type,
+        .static_ = {// extern variables are global even if they're declared at
                     // block scope
                     .global = true,
                     .init = {
@@ -258,10 +255,11 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   if (decl->storage_class == SC_STATIC) {
     SymbolTableEntry new_entry = {
         .ty = ST_STATIC_VAR,
-        .static_ = {.c_type = decl->var.c_type,
-                    .global = false,
+        .c_type = decl->c_type,
+        .static_ = {.global = false,
                     .init = {
                         .ty = INIT_HAS_VALUE,
+                        // TODO: should this be decl->c_type?
                         .c_type = basic_data_type(CTYPE_INT),
                         .numeric = {0},
                     }}};
@@ -283,14 +281,11 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   // local variable with no storage class.
   // local variables should have a unique name, meaning that no previous symbol
   // table entry should exist.
-  SymbolTableEntry new_entry = {.ty = ST_LOCAL_VAR,
-                                .local = {
-                                    .c_type = decl->var.c_type,
-                                }};
+  SymbolTableEntry new_entry = {.ty = ST_LOCAL_VAR, .c_type = decl->c_type};
   symbol_table_put(symbol_table, decl->var.name, new_entry);
   if (decl->var.init) {
     typecheck_expr(cx, decl->var.init);
-    decl->var.init = convert_to(decl->var.init, decl->var.c_type);
+    decl->var.init = convert_to(decl->var.init, decl->c_type);
   }
 }
 
@@ -329,13 +324,8 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       }
 
       // propagate type into expr
-      if (st_entry->ty == ST_LOCAL_VAR) {
-        expr->c_type = st_entry->local.c_type;
-      } else {
-        expr->c_type = st_entry->static_.c_type;
-      }
-
-      assert(expr->c_type->ty != CTYPE_NONE);
+      expr->c_type = st_entry->c_type;
+      assert(expr->c_type && expr->c_type->ty != CTYPE_NONE);
       return;
     }
     case EXPR_UNARY: {
@@ -435,9 +425,14 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
         panic("Variable %s called as a function", cstring(expr->fn_call.ident));
       }
 
-      if (st_entry->fn.params->len != expr->fn_call.args->len) {
+      assert(st_entry->c_type && st_entry->c_type->ty == CTYPE_FN);
+
+      CType* return_type = st_entry->c_type->fn.return_type;
+      Vec* param_types = st_entry->c_type->fn.param_types;
+
+      if (param_types->len != expr->fn_call.args->len) {
         panic("Function %s expected %u params but got %u",
-              cstring(expr->fn_call.ident), st_entry->fn.params->len,
+              cstring(expr->fn_call.ident), param_types->len,
               expr->fn_call.args->len);
       }
 
@@ -445,12 +440,12 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       size_t i = 0;
       vec_for_each(expr->fn_call.args, AstExpr, arg) {
         typecheck_expr(cx, iter.arg);
-        AstFnParam* param_decl = vec_get(st_entry->fn.params, i++);
-        vec_push(converted_args, convert_to(iter.arg, param_decl->c_type));
+        CType* param_type = vec_get(param_types, i++);
+        vec_push(converted_args, convert_to(iter.arg, param_type));
       }
 
       expr->fn_call.args = converted_args;
-      expr->c_type = st_entry->fn.return_type;
+      expr->c_type = return_type;
       return;
     }
     case EXPR_TERNARY: {
@@ -616,22 +611,22 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
   assert(decl->ty == AST_DECL_FN);
   SymbolTable* symbol_table = cx->symbol_table;
 
-  size_t num_params = decl->fn.params->len;
+  assert(decl->c_type->ty == CTYPE_FN);
+
   SymbolTableEntry* st_entry = hashmap_get(symbol_table->map, decl->fn.name);
 
   if (!st_entry) {
     // declared type doesn't exist in type table, so insert
     // No need to type check against previous declaration.
     bool global = decl->storage_class != SC_STATIC;
-    assert(decl->fn.return_type->ty != CTYPE_NONE);
+    assert(decl->c_type->fn.return_type->ty != CTYPE_NONE);
     SymbolTableEntry e = {
         .ty = ST_FN,
+        .c_type = decl->c_type,
         .fn =
             {
                 .defined = decl->fn.body != NULL,
                 .global = global,
-                .return_type = decl->fn.return_type,
-                .params = decl->fn.params,
             },
     };
     symbol_table_put(symbol_table, decl->fn.name, e);
@@ -644,33 +639,16 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
           "a variable.",
           cstring(decl->fn.name));
     }
-    if (st_entry->fn.params->len != num_params) {
-      panic(
-          "Function declaration %s conflicts with mismatching parameter list. "
-          "Expected %d but got %d parameters.",
-          cstring(decl->fn.name), decl->fn.params->len,
-          st_entry->fn.params->len);
-    }
 
-    // Typecheck parameter types against symbol table entry.
-    for (size_t i = 0; i < num_params; i++) {
-      AstFnParam* st_param = vec_get(st_entry->fn.params, i);
-      AstFnParam* decl_param = vec_get(decl->fn.params, i);
-      if (!c_type_eq(st_param->c_type, decl_param->c_type)) {
-        panic("Function %s has conflicting types for parameter %s",
-              cstring(decl->fn.name), cstring(decl_param->ident));
-      }
+    assert(st_entry->c_type->ty == CTYPE_FN);
+    if (!c_type_eq(st_entry->c_type, decl->c_type)) {
+      panic("Function %s does not match previous declaration",
+            cstring(decl->fn.name));
     }
 
     if (st_entry->fn.global && decl->storage_class == SC_STATIC) {
       panic("Static function declaration for %s follows non-static",
             cstring(decl->fn.name));
-    }
-
-    if (!c_type_eq(st_entry->fn.return_type, decl->fn.return_type)) {
-      panic("Function %s has conflicting return types: %u vs %u",
-            cstring(decl->fn.name), st_entry->fn.return_type,
-            decl->fn.return_type);
     }
 
     if (st_entry->fn.defined && decl->fn.body) {
@@ -681,14 +659,12 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
   // Add all parameters to the symbol table.
   // Each function parameter is treated as a local variable that gets
   // its own unique name in the symbol table.
-  if (decl->fn.params && decl->fn.params->len) {
-    vec_for_each(decl->fn.params, AstFnParam, param) {
-      SymbolTableEntry e = {.ty = ST_LOCAL_VAR,
-                            .local = {
-                                .c_type = iter.param->c_type,
-                            }};
-      symbol_table_put(cx->symbol_table, iter.param->ident, e);
-    }
+  assert(decl->fn.param_names->len == decl->c_type->fn.param_types->len);
+  for (size_t i = 0; i < decl->fn.param_names->len; i++) {
+    CType* param_type = vec_get(decl->c_type->fn.param_types, i);
+    String* param_name = vec_get(decl->fn.param_names, i);
+    SymbolTableEntry e = {.ty = ST_LOCAL_VAR, .c_type = param_type};
+    symbol_table_put(cx->symbol_table, param_name, e);
   }
 
   if (decl->fn.body && decl->fn.body->len) {
@@ -699,7 +675,7 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
 
     // Set curr_fn_return_type to the declaration's return type. This is used
     // when typechecking and casting return statements.
-    cx->curr_fn_return_type = decl->fn.return_type;
+    cx->curr_fn_return_type = decl->c_type->fn.return_type;
     vec_for_each(decl->fn.body, AstBlockItem, block_item) {
       typecheck_block_item(cx, iter.block_item);
     }

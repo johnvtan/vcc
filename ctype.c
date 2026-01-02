@@ -2,11 +2,50 @@
 #include <stdlib.h>
 #include <vcc/ctype.h>
 
-bool c_type_eq(CType* c1, CType* c2) { return c1->ty == c2->ty; }
+bool c_type_eq(const CType* c1, const CType* c2) {
+  if (c1->ty != c2->ty) {
+    return false;
+  }
 
-CType* basic_data_type(CTypeKind ty) {
+  if (c1->ty != CTYPE_FN) {
+    // basic data types don't need further comparison
+    return true;
+  }
+
+  if (!c_type_eq(c1->fn.return_type, c2->fn.return_type)) {
+    return false;
+  }
+
+  if (c1->fn.param_types->len != c2->fn.param_types->len) {
+    return false;
+  }
+
+  // Check all params
+  for (size_t i = 0; i < c1->fn.param_types->len; i++) {
+    CType* p1 = vec_get(c1->fn.param_types, i);
+    CType* p2 = vec_get(c2->fn.param_types, i);
+    if (!c_type_eq(p1, p2)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static CType* new_c_type(CTypeKind ty) {
   CType* ret = calloc(1, sizeof(CType));
   ret->ty = ty;
+  return ret;
+}
+
+CType* basic_data_type(CTypeKind ty) {
+  assert(ty != CTYPE_FN);
+  return new_c_type(ty);
+}
+
+CType* function_type(CType* return_type, Vec* param_types) {
+  CType* ret = new_c_type(CTYPE_FN);
+  ret->fn.return_type = return_type;
+  ret->fn.param_types = param_types;
   return ret;
 }
 

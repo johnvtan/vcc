@@ -953,9 +953,22 @@ static AstStmt* parse_stmt(ParseContext* cx) {
   return s;
 }
 
-static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
+typedef struct {
+  // Vec<String>
+  Vec* idents;
+
+  // Vec<CType>
+  Vec* c_types;
+} ParameterList;
+
+static ParameterList parse_parameter_list(ParseContext* cx,
+                                          Hashmap* ident_map) {
+  ParameterList param_list = {
+      .idents = vec_new(sizeof(String)),
+      .c_types = vec_new(sizeof(CType)),
+  };
+
   expect(cx, TK_OPEN_PAREN);
-  Vec* param_list = vec_new(sizeof(AstFnParam));
   if (match(cx, TK_VOID)) {
     consume(cx);
     expect(cx, TK_CLOSE_PAREN);
@@ -970,8 +983,7 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
             cstring(t.content));
     }
 
-    AstFnParam* param = vec_push_empty(param_list);
-    param->c_type = specs.c_type;
+    vec_push(param_list.c_types, specs.c_type);
 
     // In general, we check for redeclarations in typechecking, but
     // for function parameters we check here so that we can then
@@ -981,9 +993,9 @@ static Vec* parse_parameter_list(ParseContext* cx, Hashmap* ident_map) {
     }
 
     // Update identifier resolution.
-    param->ident = string_format("%s.%u", cstring(t.content), cx->var_count++);
-    hashmap_put(ident_map, t.content,
-                new_ident_info(param->ident, false, cx->scope));
+    String* ident = string_format("%s.%u", cstring(t.content), cx->var_count++);
+    vec_push(param_list.idents, ident);
+    hashmap_put(ident_map, t.content, new_ident_info(ident, false, cx->scope));
 
     if (match(cx, TK_CLOSE_PAREN)) {
       break;
@@ -1014,9 +1026,10 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map,
   decl->ty = AST_DECL_FN;
 
   decl->fn.name = t.content;
-  decl->fn.params = parse_parameter_list(cx, ident_map);
+  ParameterList param_list = parse_parameter_list(cx, ident_map);
+  decl->fn.param_names = param_list.idents;
   decl->storage_class = specs.storage_class;
-  decl->fn.return_type = specs.c_type;
+  decl->c_type = function_type(specs.c_type, param_list.c_types);
 
   // Resolve function identifier.
   ResolvedIdentifier resolved = resolve_identifier(cx->scope, decl->fn.name);
@@ -1134,7 +1147,7 @@ static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
   decl->ty = AST_DECL_VAR;
   decl->var.name = unique_var_name;
   decl->storage_class = specs.storage_class;
-  decl->var.c_type = specs.c_type;
+  decl->c_type = specs.c_type;
 
   // Parse initializer if it exists.
   if (peek(cx).ty == TK_EQ) {

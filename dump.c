@@ -13,6 +13,7 @@ static const char* c_type_to_string(CType* type) {
     X(CTYPE_ULONG);
     X(CTYPE_DOUBLE);
     X(CTYPE_LONG);
+    X(CTYPE_FN);
   }
 }
 
@@ -90,15 +91,15 @@ static void dump_ir_val(SymbolTable* symbol_table, IrVal* val) {
   switch (entry->ty) {
     case ST_LOCAL_VAR:
       printf("{ local=%s type=%s }", cstring(val->var),
-             c_type_to_string(entry->local.c_type));
+             c_type_to_string(entry->c_type));
       break;
     case ST_STATIC_VAR:
       printf("{ static=%s type=%s global=%u }", cstring(val->var),
-             c_type_to_string(entry->static_.c_type), entry->static_.global);
+             c_type_to_string(entry->c_type), entry->static_.global);
       break;
     case ST_FN:
       printf("{ fn=%s ret_type=%s }", cstring(val->var),
-             c_type_to_string(entry->fn.return_type));
+             c_type_to_string(entry->c_type->fn.return_type));
       break;
   }
 }

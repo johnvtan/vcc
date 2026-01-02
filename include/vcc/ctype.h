@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <vcc/vec.h>
 
 typedef enum {
   CTYPE_NONE = 0,  // used for catching errors
@@ -11,14 +12,23 @@ typedef enum {
   CTYPE_UINT,
   CTYPE_ULONG,
   CTYPE_DOUBLE,
+  CTYPE_FN,
 } CTypeKind;  // CTypeType would be unfortunate naming
 
-typedef struct {
+typedef struct CType CType;
+struct CType {
   CTypeKind ty;
-} CType;
 
-bool c_type_eq(CType* c1, CType* c2);
+  struct {
+    CType* return_type;
+    // Vec<CType>
+    Vec* param_types;
+  } fn;
+};
+
+bool c_type_eq(const CType* c1, const CType* c2);
 CType* basic_data_type(CTypeKind ty);
+CType* function_type(CType* return_type, Vec* param_types);
 
 // An architecture-independent way for describing the size of a type. We don't
 // specify how many bytes these are in the IR.

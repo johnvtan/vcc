@@ -104,11 +104,6 @@ struct AstExpr {
   };
 };
 
-typedef struct AstFnParam {
-  CType* c_type;
-  String* ident;
-} AstFnParam;
-
 typedef enum StorageClass {
   SC_NONE,
   SC_STATIC,
@@ -122,10 +117,11 @@ typedef struct {
   } ty;
 
   StorageClass storage_class;
+  CType* c_type;
+
   union {
     struct {
       String* name;
-      CType* c_type;
 
       // Tentatively declared variables should be initialized to 0.
       AstExpr* init;
@@ -134,10 +130,8 @@ typedef struct {
     struct {
       String* name;
 
-      CType* return_type;
-
-      // Vec<AstFnParam>
-      Vec* params;
+      // Vec<String>
+      Vec* param_names;
 
       // Vec<AstBlockItem>
       Vec* body;

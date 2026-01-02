@@ -6,13 +6,14 @@
 typedef struct {
   enum {
     // NOTE: this is ordered by priority. INIT_NONE is lowest priority.
-    // Ensure that priority is maintatined in this definition.
+    // Ensure that priority is maintained in this definition.
     INIT_NONE = 0,
     INIT_TENTATIVE = 1,
     INIT_HAS_VALUE = 2,
   } ty;
 
-  // only for INIT_HAS_VALUE
+  // This might be redundant but I think it's a bit easier to reason about
+  // when the c_type is attached to the initializer.
   CType* c_type;
   NumericValue numeric;
 } StaticInit;
@@ -20,7 +21,6 @@ typedef struct {
 // TODO: add dump static init func here.
 
 typedef struct {
-  CType* c_type;
   bool global;
   StaticInit init;
 } StaticVariableSymbol;
@@ -32,27 +32,16 @@ typedef struct {
     ST_FN,
   } ty;
 
-  // TODO: have a single CType field used by everything in the symbol table.
+  CType* c_type;
 
   // ST_FN
   struct {
     bool defined;
-
-    // visibility
     bool global;
-    CType* return_type;
-
-    // Vec<AstFnParam>
-    Vec* params;
   } fn;
 
   // ST_STATIC_VAR
   StaticVariableSymbol static_;
-
-  // ST_LOCAL_VAR
-  struct {
-    CType* c_type;
-  } local;
 } SymbolTableEntry;
 
 typedef struct {
