@@ -13,14 +13,14 @@ typedef struct {
   } ty;
 
   // only for INIT_HAS_VALUE
-  CType c_type;
+  CType* c_type;
   NumericValue numeric;
 } StaticInit;
 
 // TODO: add dump static init func here.
 
 typedef struct {
-  CType c_type;
+  CType* c_type;
   bool global;
   StaticInit init;
 } StaticVariableSymbol;
@@ -40,7 +40,7 @@ typedef struct {
 
     // visibility
     bool global;
-    CType return_type;
+    CType* return_type;
 
     // Vec<AstFnParam>
     Vec* params;
@@ -51,7 +51,7 @@ typedef struct {
 
   // ST_LOCAL_VAR
   struct {
-    CType c_type;
+    CType* c_type;
   } local;
 } SymbolTableEntry;
 
@@ -71,19 +71,6 @@ typedef struct {
   // Vec<String>
   Vec* symbols;
 } SymbolTable;
-
-// An architecture-independent way for describing the size of a type. We don't
-// specify how many bytes these are in the IR.
-typedef enum {
-  SIZE_INT,
-  SIZE_LONG,
-} TypeSize;
-
-// Helpers for determining properties of types.
-CType get_common_type(CType t1, CType t2);
-TypeSize get_type_size(CType ty);
-bool type_is_signed(CType ty);
-bool type_is_integer(CType ty);
 
 SymbolTable* typecheck_ast(AstProgram* prog);
 #endif  // VCC_TYPECHECK_H

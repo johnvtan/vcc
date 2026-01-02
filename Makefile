@@ -9,6 +9,7 @@ OBJDIR := obj
 BINDIR := bin
 
 COMPILER_SRCS := ast.c \
+				ctype.c\
 				dump.c \
 			  emit_x64.c \
 				errors.c \

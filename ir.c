@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>  // for memset
+#include <vcc/ctype.h>
 #include <vcc/errors.h>
 #include <vcc/ir.h>
 
@@ -29,7 +30,7 @@ static IrVal* var(String* name) {
 // during variable resolution in parsing.
 //
 // This will also add the temporary variable to the symbol table.
-static IrVal* temp(Context* cx, CType c_type) {
+static IrVal* temp(Context* cx, CType* c_type) {
   static int n = 0;
   String* name = string_format(".tmp.%d", n++);
 
@@ -124,10 +125,10 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 //
 static IrVal* gen_expr(Context* cx, AstExpr* expr);
 
-static CompTimeConst one(CType c_type) {
+static CompTimeConst one(CType* c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  if (type_is_integer(c_type)) {
+  if (is_integer(c_type)) {
     ret.numeric.int_ = 1;
   } else {
     ret.numeric.double_ = 1.0;
@@ -135,10 +136,10 @@ static CompTimeConst one(CType c_type) {
   return ret;
 }
 
-static CompTimeConst zero(CType c_type) {
+static CompTimeConst zero(CType* c_type) {
   CompTimeConst ret;
   ret.c_type = c_type;
-  if (type_is_integer(c_type)) {
+  if (is_integer(c_type)) {
     ret.numeric.int_ = 0;
   } else {
     ret.numeric.double_ = 0.0;
@@ -247,26 +248,26 @@ static IrVal* gen_binary(Context* cx, AstExpr* expr) {
   return dst;
 }
 
-static IrVal* ir_cast(Context* cx, IrVal* val, CType from, CType to) {
+static IrVal* ir_cast(Context* cx, IrVal* val, CType* from, CType* to) {
   if (c_type_eq(from, to)) {
     return val;
   }
 
   IrVal* dst = temp(cx, to);
-  if (from.ty == CTYPE_DOUBLE && type_is_integer(to)) {
-    IrType ty = type_is_signed(to) ? IR_DOUBLE_TO_INT : IR_DOUBLE_TO_UINT;
+  if (from->ty == CTYPE_DOUBLE && is_integer(to)) {
+    IrType ty = is_signed(to) ? IR_DOUBLE_TO_INT : IR_DOUBLE_TO_UINT;
     push_inst(cx->out, unary(ty, val, dst));
     return dst;
   }
 
-  if (type_is_integer(from) && to.ty == CTYPE_DOUBLE) {
-    IrType ty = type_is_signed(from) ? IR_INT_TO_DOUBLE : IR_UINT_TO_DOUBLE;
+  if (is_integer(from) && to->ty == CTYPE_DOUBLE) {
+    IrType ty = is_signed(from) ? IR_INT_TO_DOUBLE : IR_UINT_TO_DOUBLE;
     push_inst(cx->out, unary(ty, val, dst));
     return dst;
   }
 
   // convert between integer types
-  assert(type_is_integer(from) && type_is_integer(to));
+  assert(is_integer(from) && is_integer(to));
 
   TypeSize from_size = get_type_size(from);
   TypeSize to_size = get_type_size(to);
@@ -280,7 +281,7 @@ static IrVal* ir_cast(Context* cx, IrVal* val, CType from, CType to) {
     // The type we're converting to is larger, so we have to figure out how
     // to fill up the rest of the size based on the signedness of the type.
     assert(from_size < to_size);
-    if (type_is_signed(from)) {
+    if (is_signed(from)) {
       push_inst(cx->out, unary(IR_SIGN_EXTEND, val, dst));
     } else {
       push_inst(cx->out, unary(IR_ZERO_EXTEND, val, dst));
@@ -334,11 +335,11 @@ static IrVal* gen_assign(Context* cx, AstExpr* expr) {
   IrVal* lhs = gen_expr(cx, expr->binary.lhs);
   IrVal* rhs = gen_expr(cx, expr->binary.rhs);
 
-  CType lhs_type = expr->binary.lhs->c_type;
-  CType rhs_type = expr->binary.rhs->c_type;
+  CType* lhs_type = expr->binary.lhs->c_type;
+  CType* rhs_type = expr->binary.rhs->c_type;
 
   if (!c_type_eq(lhs_type, rhs_type)) {
-    CType common_type = get_common_type(lhs_type, rhs_type);
+    CType* common_type = get_common_type(lhs_type, rhs_type);
 
     IrVal* intermediate_dst = temp(cx, common_type);
     IrVal* intermediate_lhs = ir_cast(cx, lhs, lhs_type, common_type);

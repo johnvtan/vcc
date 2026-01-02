@@ -5,8 +5,8 @@
   case n:    \
     return #n;
 
-static const char* c_type_to_string(CType type) {
-  switch (type.ty) {
+static const char* c_type_to_string(CType* type) {
+  switch (type->ty) {
     X(CTYPE_NONE);
     X(CTYPE_INT);
     X(CTYPE_UINT);
@@ -54,9 +54,9 @@ static const char* ir_type_to_string(IrType type) {
   }
 }
 
-static void dump_numeric(CType type, NumericValue val) {
+static void dump_numeric(CType* type, NumericValue val) {
   printf("%s, val=", c_type_to_string(type));
-  switch (type.ty) {
+  switch (type->ty) {
     case CTYPE_INT:
       printf("%d", (int)val.int_);
       break;

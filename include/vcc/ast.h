@@ -1,40 +1,13 @@
 #ifndef VCC_AST_H
 #define VCC_AST_H
 
+#include <vcc/ctype.h>
 #include <vcc/hashmap.h>
 #include <vcc/string.h>
 #include <vcc/vec.h>
 
 typedef struct AstStmt AstStmt;
 typedef struct AstExpr AstExpr;
-
-//
-// AST type definition
-//
-
-typedef struct {
-  enum {
-    CTYPE_NONE = 0,  // used for catching errors
-    CTYPE_INT,
-    CTYPE_LONG,
-    CTYPE_UINT,
-    CTYPE_ULONG,
-    CTYPE_DOUBLE,
-  } ty;
-} CType;
-
-static inline bool c_type_eq(CType c1, CType c2) { return c1.ty == c2.ty; }
-
-typedef union {
-  uint64_t int_;
-  double double_;
-} NumericValue;
-
-// Container for a compile time constant.
-typedef struct {
-  CType c_type;
-  NumericValue numeric;
-} CompTimeConst;
 
 //
 // AST expression definition
@@ -56,7 +29,7 @@ struct AstExpr {
   AstExprType ty;
 
   // The C type of the expression.
-  CType c_type;
+  CType* c_type;
 
   union {
     CompTimeConst const_;
@@ -125,14 +98,14 @@ struct AstExpr {
 
     // EXPR_CAST
     struct {
-      CType target_type;
+      CType* target_type;
       AstExpr* expr;
     } cast;
   };
 };
 
 typedef struct AstFnParam {
-  CType c_type;
+  CType* c_type;
   String* ident;
 } AstFnParam;
 
@@ -152,7 +125,7 @@ typedef struct {
   union {
     struct {
       String* name;
-      CType c_type;
+      CType* c_type;
 
       // Tentatively declared variables should be initialized to 0.
       AstExpr* init;
@@ -161,7 +134,7 @@ typedef struct {
     struct {
       String* name;
 
-      CType return_type;
+      CType* return_type;
 
       // Vec<AstFnParam>
       Vec* params;

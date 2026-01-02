@@ -6,7 +6,7 @@
 // Context struct for the typecheck pass.
 typedef struct {
   SymbolTable* symbol_table;
-  CType curr_fn_return_type;
+  CType* curr_fn_return_type;
 } Context;
 
 // forward declarations
@@ -19,65 +19,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr);
 // Type conversion helpers.
 //
 
-TypeSize get_type_size(CType ty) {
-  switch (ty.ty) {
-    case CTYPE_INT:
-    case CTYPE_UINT:
-      return SIZE_INT;
-    case CTYPE_LONG:
-    case CTYPE_ULONG:
-      return SIZE_LONG;
-    default:
-      assert(false);
-  }
-}
-
-bool type_is_signed(CType ty) {
-  switch (ty.ty) {
-    case CTYPE_INT:
-    case CTYPE_LONG:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool type_is_integer(CType ty) {
-  switch (ty.ty) {
-    case CTYPE_INT:
-    case CTYPE_UINT:
-    case CTYPE_LONG:
-    case CTYPE_ULONG:
-      return true;
-    case CTYPE_DOUBLE:
-    default:
-      return false;
-  }
-}
-
-CType get_common_type(CType t1, CType t2) {
-  if (c_type_eq(t1, t2)) {
-    return t1;
-  }
-
-  if (t1.ty == CTYPE_DOUBLE || t2.ty == CTYPE_DOUBLE) {
-    return (CType){.ty = CTYPE_DOUBLE};
-  }
-
-  TypeSize t1_size = get_type_size(t1);
-  TypeSize t2_size = get_type_size(t2);
-
-  if (t1_size == t2_size) {
-    if (type_is_signed(t1)) {
-      return t2;
-    }
-    return t1;
-  }
-
-  return t1_size > t2_size ? t1 : t2;
-}
-
-static AstExpr* cast(AstExpr* e, CType target_type) {
+static AstExpr* cast(AstExpr* e, CType* target_type) {
   AstExpr* cast_expr = calloc(1, sizeof(AstExpr));
   assert(!c_type_eq(e->c_type, target_type));
   cast_expr->ty = EXPR_CAST;
@@ -89,21 +31,22 @@ static AstExpr* cast(AstExpr* e, CType target_type) {
   return cast_expr;
 }
 
-static AstExpr* convert_to(AstExpr* e, CType target_type) {
-  assert(e->c_type.ty != CTYPE_NONE);
+static AstExpr* convert_to(AstExpr* e, CType* target_type) {
+  assert(e->c_type->ty != CTYPE_NONE);
   if (c_type_eq(e->c_type, target_type)) {
     return e;
   }
   return cast(e, target_type);
 }
 
-static NumericValue cast_numeric_value(NumericValue val, CType from, CType to) {
+static NumericValue cast_numeric_value(NumericValue val, CType* from,
+                                       CType* to) {
   if (c_type_eq(from, to)) {
     return val;
   }
 
-  if (type_is_integer(from)) {
-    switch (to.ty) {
+  if (is_integer(from)) {
+    switch (to->ty) {
       case CTYPE_INT:
         return (NumericValue){.int_ = (int)val.int_};
       case CTYPE_LONG:
@@ -118,8 +61,8 @@ static NumericValue cast_numeric_value(NumericValue val, CType from, CType to) {
         assert(false);
     }
   } else {
-    assert(from.ty == CTYPE_DOUBLE);
-    switch (to.ty) {
+    assert(from->ty == CTYPE_DOUBLE);
+    switch (to->ty) {
       case CTYPE_INT:
         return (NumericValue){.int_ = (int)val.double_};
       case CTYPE_LONG:
@@ -139,7 +82,7 @@ static NumericValue cast_numeric_value(NumericValue val, CType from, CType to) {
 }
 
 static CompTimeConst convert_comptime_const_to(CompTimeConst c,
-                                               CType target_type) {
+                                               CType* target_type) {
   if (c_type_eq(c.c_type, target_type)) {
     return c;
   }
@@ -150,7 +93,7 @@ static CompTimeConst convert_comptime_const_to(CompTimeConst c,
   return ret;
 }
 
-static StaticInit convert_static_init_to(StaticInit init, CType target_type) {
+static StaticInit convert_static_init_to(StaticInit init, CType* target_type) {
   if (c_type_eq(init.c_type, target_type)) {
     return init;
   }
@@ -313,14 +256,15 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   // with no previous entries in the symbol table by this point.
   assert(!st_entry);
   if (decl->storage_class == SC_STATIC) {
-    SymbolTableEntry new_entry = {.ty = ST_STATIC_VAR,
-                                  .static_ = {.c_type = decl->var.c_type,
-                                              .global = false,
-                                              .init = {
-                                                  .ty = INIT_HAS_VALUE,
-                                                  .c_type = {.ty = CTYPE_INT},
-                                                  .numeric = {0},
-                                              }}};
+    SymbolTableEntry new_entry = {
+        .ty = ST_STATIC_VAR,
+        .static_ = {.c_type = decl->var.c_type,
+                    .global = false,
+                    .init = {
+                        .ty = INIT_HAS_VALUE,
+                        .c_type = basic_data_type(CTYPE_INT),
+                        .numeric = {0},
+                    }}};
 
     if (decl->var.init) {
       if (decl->var.init->ty != EXPR_CONST) {
@@ -391,7 +335,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
         expr->c_type = st_entry->static_.c_type;
       }
 
-      assert(expr->c_type.ty != CTYPE_NONE);
+      assert(expr->c_type->ty != CTYPE_NONE);
       return;
     }
     case EXPR_UNARY: {
@@ -406,7 +350,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
           check_lvalue(expr->unary.expr);
           break;
         case UNARY_COMPLEMENT:
-          if (!type_is_integer(expr->unary.expr->c_type)) {
+          if (!is_integer(expr->unary.expr->c_type)) {
             panic("Unary complement operand must be an integer", 1);
           }
           break;
@@ -415,7 +359,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       }
 
       if (expr->unary.op == UNARY_NOT) {
-        expr->c_type.ty = CTYPE_INT;
+        expr->c_type = basic_data_type(CTYPE_INT);
       } else {
         expr->c_type = expr->unary.expr->c_type;
       }
@@ -423,15 +367,15 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
     }
     case EXPR_BINARY: {
       typecheck_expr(cx, expr->binary.lhs);
-      assert(expr->binary.lhs->c_type.ty != CTYPE_NONE);
+      assert(expr->binary.lhs->c_type->ty != CTYPE_NONE);
       typecheck_expr(cx, expr->binary.rhs);
-      assert(expr->binary.rhs->c_type.ty != CTYPE_NONE);
+      assert(expr->binary.rhs->c_type->ty != CTYPE_NONE);
 
       if (expr->binary.op == BINARY_REM ||
           expr->binary.op == BINARY_REM_ASSIGN) {
         // Remainder operator is only valid on integer operands.
-        if (!type_is_integer(expr->binary.lhs->c_type) ||
-            !type_is_integer(expr->binary.rhs->c_type)) {
+        if (!is_integer(expr->binary.lhs->c_type) ||
+            !is_integer(expr->binary.rhs->c_type)) {
           panic("Remainder operator is only valid for integer operands.", 1);
         }
       }
@@ -453,12 +397,12 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
 
       // AND and OR don't need to convert operands.
       if (expr->binary.op == BINARY_AND || expr->binary.op == BINARY_OR) {
-        expr->c_type.ty = CTYPE_INT;
+        expr->c_type = basic_data_type(CTYPE_INT);
         return;
       }
 
       // For all other types, implicitly perform conversion to the common type.
-      CType common_type =
+      CType* common_type =
           get_common_type(expr->binary.lhs->c_type, expr->binary.rhs->c_type);
       expr->binary.lhs = convert_to(expr->binary.lhs, common_type);
       expr->binary.rhs = convert_to(expr->binary.rhs, common_type);
@@ -473,7 +417,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
           break;
         default:
           // All other comparison operations are always an integer.
-          expr->c_type.ty = CTYPE_INT;
+          expr->c_type = basic_data_type(CTYPE_INT);
           break;
       }
 
@@ -513,12 +457,12 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       typecheck_expr(cx, expr->ternary.cond);
       typecheck_expr(cx, expr->ternary.then);
       typecheck_expr(cx, expr->ternary.else_);
-      assert(expr->ternary.cond->c_type.ty != CTYPE_NONE);
-      assert(expr->ternary.then->c_type.ty != CTYPE_NONE);
-      assert(expr->ternary.else_->c_type.ty != CTYPE_NONE);
+      assert(expr->ternary.cond->c_type->ty != CTYPE_NONE);
+      assert(expr->ternary.then->c_type->ty != CTYPE_NONE);
+      assert(expr->ternary.else_->c_type->ty != CTYPE_NONE);
 
-      CType common_type = get_common_type(expr->ternary.then->c_type,
-                                          expr->ternary.else_->c_type);
+      CType* common_type = get_common_type(expr->ternary.then->c_type,
+                                           expr->ternary.else_->c_type);
       expr->ternary.then = convert_to(expr->ternary.then, common_type);
       expr->ternary.else_ = convert_to(expr->ternary.else_, common_type);
       expr->c_type = common_type;
@@ -526,7 +470,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
     }
     case EXPR_CONST: {
       // Constants have their types populated during parsing.
-      assert(expr->c_type.ty != CTYPE_NONE);
+      assert(expr->c_type->ty != CTYPE_NONE);
       assert(c_type_eq(expr->c_type, expr->const_.c_type));
       return;
     }
@@ -543,7 +487,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
 }
 
 static String* comptime_const_to_string(CompTimeConst c) {
-  switch (c.c_type.ty) {
+  switch (c.c_type->ty) {
     case CTYPE_INT:
       return string_format("%d", c.numeric.int_);
     case CTYPE_LONG:
@@ -562,7 +506,7 @@ static void typecheck_statement(Context* cx, AstStmt* stmt) {
     case STMT_RETURN:
     case STMT_EXPR: {
       typecheck_expr(cx, stmt->expr);
-      assert(cx->curr_fn_return_type.ty != CTYPE_NONE);
+      assert(cx->curr_fn_return_type != NULL);
       stmt->expr = convert_to(stmt->expr, cx->curr_fn_return_type);
       return;
     }
@@ -615,8 +559,8 @@ static void typecheck_statement(Context* cx, AstStmt* stmt) {
       // check case statements and jumps
       Hashmap* case_conds = hashmap_new();
       bool has_default = false;
-      CType switch_cond_ty = stmt->switch_.cond->c_type;
-      assert(switch_cond_ty.ty != CTYPE_NONE);
+      CType* switch_cond_ty = stmt->switch_.cond->c_type;
+      assert(switch_cond_ty->ty != CTYPE_NONE);
       vec_for_each(stmt->switch_.case_jumps, AstCaseJump, case_) {
         if (iter.case_->is_default) {
           if (has_default) {
@@ -626,7 +570,7 @@ static void typecheck_statement(Context* cx, AstStmt* stmt) {
           continue;
         }
 
-        if (!type_is_integer(iter.case_->const_expr.c_type)) {
+        if (!is_integer(iter.case_->const_expr.c_type)) {
           panic("Cases must be integer constants", 1);
         }
 
@@ -679,7 +623,7 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
     // declared type doesn't exist in type table, so insert
     // No need to type check against previous declaration.
     bool global = decl->storage_class != SC_STATIC;
-    assert(decl->fn.return_type.ty != CTYPE_NONE);
+    assert(decl->fn.return_type->ty != CTYPE_NONE);
     SymbolTableEntry e = {
         .ty = ST_FN,
         .fn =
@@ -751,7 +695,7 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
     // Setup context for parsing the body.
     // Since we can't have nested function bodies, it should be okay that
     // cx->curr_fn_return_type is a single value instead of a stack.
-    assert(cx->curr_fn_return_type.ty == CTYPE_NONE);
+    assert(cx->curr_fn_return_type == NULL);
 
     // Set curr_fn_return_type to the declaration's return type. This is used
     // when typechecking and casting return statements.
@@ -762,7 +706,7 @@ static void typecheck_function(Context* cx, AstDecl* decl) {
 
     // When we leave the function body, we can reset this to CTYPE_NONE which
     // indicates that we're no longer in a function body.
-    cx->curr_fn_return_type.ty = CTYPE_NONE;
+    cx->curr_fn_return_type = NULL;
   }
 }
 
@@ -771,7 +715,7 @@ SymbolTable* typecheck_ast(AstProgram* prog) {
   cx.symbol_table = calloc(1, sizeof(SymbolTable));
   cx.symbol_table->map = hashmap_new();
   cx.symbol_table->symbols = vec_new(sizeof(String));
-  cx.curr_fn_return_type.ty = CTYPE_NONE;
+  cx.curr_fn_return_type = NULL;
 
   vec_for_each(prog->decls, AstDecl, decl) {
     if (iter.decl->ty == AST_DECL_FN) {

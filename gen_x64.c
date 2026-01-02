@@ -40,8 +40,8 @@ static int data_type_to_size_bytes(x64_DataType type) {
   }
 }
 
-static x64_DataType c_to_data_type(CType c_type) {
-  switch (c_type.ty) {
+static x64_DataType c_to_data_type(CType* c_type) {
+  switch (c_type->ty) {
     case CTYPE_INT:
     case CTYPE_UINT:
       return X64_LONGWORD;
@@ -55,7 +55,7 @@ static x64_DataType c_to_data_type(CType c_type) {
   }
 }
 
-static CType symbol_c_type(Context* cx, String* symbol) {
+static CType* symbol_c_type(Context* cx, String* symbol) {
   assert(symbol);
   SymbolTableEntry* st_entry = hashmap_get(cx->symbol_table->map, symbol);
   assert(st_entry);
@@ -70,7 +70,7 @@ static CType symbol_c_type(Context* cx, String* symbol) {
   }
 }
 
-static CType ir_val_c_type(Context* cx, IrVal* val) {
+static CType* ir_val_c_type(Context* cx, IrVal* val) {
   assert(val);
 
   if (val->ty == IR_VAL_CONST) {
@@ -123,11 +123,11 @@ static x64_RegType fixup_dst_reg(x64_DataType type) {
 // x64_Operand helpers
 //
 
-static x64_Operand* imm(uint64_t val, CType c_type) {
+static x64_Operand* imm(uint64_t val, bool is_signed) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
   ret->ty = X64_OP_IMM;
   ret->imm = val;
-  ret->is_signed = type_is_signed(c_type);
+  ret->is_signed = is_signed;
   return ret;
 }
 
@@ -233,11 +233,11 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
   assert(ir->ty == IR_VAL_CONST);
   CompTimeConst c = ir->constant;
 
-  if (type_is_integer(c.c_type)) {
-    return imm(c.numeric.int_, c.c_type);
+  if (is_integer(c.c_type)) {
+    return imm(c.numeric.int_, is_signed(c.c_type));
   }
 
-  assert(c.c_type.ty == CTYPE_DOUBLE);
+  assert(c.c_type->ty == CTYPE_DOUBLE);
   return data(double_const(cx, c.numeric.double_, 8), true);
 }
 
@@ -356,8 +356,8 @@ static inline x64_Operand* mov_to_reg(Context* cx, x64_Operand* arg,
   return reg_op;
 }
 
-x64_Operand* zero(Context* cx, CType c_type) {
-  if (type_is_integer(c_type)) {
+x64_Operand* zero(Context* cx, CType* c_type) {
+  if (is_integer(c_type)) {
     static x64_Operand ZERO_INT = {
         .ty = X64_OP_IMM,
         .imm = 0,
@@ -516,28 +516,27 @@ static void cmp_and_setcc(Context* cx, x64_ConditionCode cc,
   binary_inner(cx, X64_CMP, r2, r1, r1_type);
 
   // mov 0, dst
-  mov(cx, imm(0, ir_val_c_type(cx, ir->dst)), dst, dst_type);
+  mov(cx, imm(0, is_signed(ir_val_c_type(cx, ir->dst))), dst, dst_type);
   // setcc(cc, dst)
   setcc(cx, cc, dst);
 }
 
 static void divide_int(Context* cx, IrInstruction* ir) {
-  CType c_type = ir_val_c_type(cx, ir->r1);
+  CType* c_type = ir_val_c_type(cx, ir->r1);
   assert(c_type_eq(c_type, ir_val_c_type(cx, ir->r2)));
 
   x64_DataType type = data_type_of(cx, ir);
   x64_Operand* r1 = to_x64_op(cx, ir->r1);
   x64_Operand* r2 = to_x64_op(cx, ir->r2);
-  const bool is_signed = type_is_signed(c_type);
 
   mov(cx, r1, reg(REG_AX), type);
-  if (is_signed) {
+  if (is_signed(c_type)) {
     instr0(cx, X64_CDQ, type);
   } else {
     mov(cx, imm(0, c_type), reg(REG_DX), type);
   }
 
-  x64_InstructionType div_instr = is_signed ? X64_IDIV : X64_DIV;
+  x64_InstructionType div_instr = is_signed(c_type) ? X64_IDIV : X64_DIV;
 
   if (r2->ty == X64_OP_IMM) {
     // idiv isn't allowed with immediate args
@@ -579,8 +578,8 @@ static void zero_extend(Context* cx, x64_Operand* src, x64_Operand* dst,
   mov(cx, fixup, dst, to);
 }
 
-static bool use_signed_cc(CType c_type) {
-  return type_is_integer(c_type) && type_is_signed(c_type);
+static bool use_signed_cc(CType* c_type) {
+  return is_integer(c_type) && is_signed(c_type);
 }
 
 //
@@ -671,8 +670,7 @@ static int prepare_fn_call(Context* cx, IrInstruction* ir) {
   if (stack_args->len % 2) {
     // adjust stack if we have an odd number of arguments.
     // The x64 stack must be 16 byte aligned.
-    instr2(cx, X64_SUB, imm(8, (CType){.ty = CTYPE_ULONG}), reg(REG_SP),
-           X64_QUADWORD);
+    instr2(cx, X64_SUB, imm(8, false), reg(REG_SP), X64_QUADWORD);
     stack_to_dealloc += 8;
   }
 
@@ -759,10 +757,10 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_UNARY_NEG: {
-        if (type_is_integer(ir_val_c_type(&cx, ir->r1))) {
+        if (is_integer(ir_val_c_type(&cx, ir->r1))) {
           unary(&cx, X64_NEG, ir);
         } else {
-          assert(ir_val_c_type(&cx, ir->r1).ty == CTYPE_DOUBLE);
+          assert(ir_val_c_type(&cx, ir->r1)->ty == CTYPE_DOUBLE);
           x64_DataType data_type = data_type_of(&cx, ir);
 
           // Must be 16 byte aligned for xorpd instruction.
@@ -908,7 +906,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_DOUBLE_TO_INT: {
-        assert(ir_val_c_type(&cx, ir->r1).ty == CTYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->r1)->ty == CTYPE_DOUBLE);
 
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
@@ -920,12 +918,12 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_DOUBLE_TO_UINT: {
-        assert(ir_val_c_type(&cx, ir->r1).ty == CTYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->r1)->ty == CTYPE_DOUBLE);
 
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
 
-        if (ir_val_c_type(&cx, ir->dst).ty == CTYPE_UINT) {
+        if (ir_val_c_type(&cx, ir->dst)->ty == CTYPE_UINT) {
           // If converting to a uint, then convert to a signed long
           // If the double we're converting from is outside the range of a uint
           // (e.g. negative), then behavior is undefined so anything can happen.
@@ -957,15 +955,14 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         binary_inner(&cx, X64_SUB, upper_bound, xmm1, X64_DOUBLE);
 
         cvttsd2si(&cx, xmm1, dst, X64_QUADWORD);
-        binary_inner(&cx, X64_ADD,
-                     imm((uint64_t)LONG_MAX + 1, (CType){.ty = CTYPE_ULONG}),
-                     dst, X64_QUADWORD);
+        binary_inner(&cx, X64_ADD, imm((uint64_t)LONG_MAX + 1, false), dst,
+                     X64_QUADWORD);
 
         label(&cx, end);
         break;
       }
       case IR_INT_TO_DOUBLE: {
-        assert(ir_val_c_type(&cx, ir->dst).ty == CTYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->dst)->ty == CTYPE_DOUBLE);
 
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
@@ -977,13 +974,13 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_UINT_TO_DOUBLE: {
-        assert(ir_val_c_type(&cx, ir->dst).ty == CTYPE_DOUBLE);
+        assert(ir_val_c_type(&cx, ir->dst)->ty == CTYPE_DOUBLE);
         x64_Operand* src = to_x64_op(&cx, ir->r1);
         x64_Operand* dst = to_x64_op(&cx, ir->dst);
         x64_DataType src_type = ir_val_to_data_type(&cx, ir->r1);
-        CType src_c_type = ir_val_c_type(&cx, ir->r1);
+        CType* src_c_type = ir_val_c_type(&cx, ir->r1);
 
-        if (ir_val_c_type(&cx, ir->r1).ty == CTYPE_UINT) {
+        if (ir_val_c_type(&cx, ir->r1)->ty == CTYPE_UINT) {
           // Similar to double to UINT. Zero extend to a signed long then
           // convert.
           x64_Operand* ax = reg(REG_AX);
@@ -1031,8 +1028,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
 
         // Deallocate stack if necessary.
         if (stack_to_dealloc) {
-          instr2(&cx, X64_ADD,
-                 imm(stack_to_dealloc, (CType){.ty = CTYPE_ULONG}), reg(REG_SP),
+          instr2(&cx, X64_ADD, imm(stack_to_dealloc, false), reg(REG_SP),
                  X64_QUADWORD);
         }
 
@@ -1060,7 +1056,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
   x64_Instruction* alloc_stack = vec_get(ret->instructions, 0);
   *alloc_stack = (x64_Instruction){
       .ty = X64_SUB,
-      .r1 = imm(ret->stack_size, (CType){.ty = CTYPE_ULONG}),
+      .r1 = imm(ret->stack_size, basic_data_type(CTYPE_ULONG)),
       .r2 = reg(REG_SP),
       .data_type = X64_QUADWORD,
   };
@@ -1076,7 +1072,7 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
   ret->init_val = ir->init.numeric;
   ret->data_type = c_to_data_type(ir->init.c_type);
 
-  switch (ir->init.c_type.ty) {
+  switch (ir->init.c_type->ty) {
     case CTYPE_INT:
       ret->is_signed = true;
     case CTYPE_UINT:
