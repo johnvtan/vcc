@@ -12,6 +12,7 @@ typedef enum {
   CTYPE_UINT,
   CTYPE_ULONG,
   CTYPE_DOUBLE,
+  CTYPE_PTR,
   CTYPE_FN,
 } CTypeKind;  // CTypeType would be unfortunate naming
 
@@ -19,6 +20,10 @@ typedef struct CType CType;
 struct CType {
   CTypeKind ty;
 
+  // CTYPE_PTR
+  struct CType* ptr_ref;
+
+  // CTYPE_FN
   struct {
     CType* return_type;
     // Vec<CType>
@@ -29,6 +34,7 @@ struct CType {
 bool c_type_eq(const CType* c1, const CType* c2);
 CType* basic_data_type(CTypeKind ty);
 CType* function_type(CType* return_type, Vec* param_types);
+CType* pointer_to(CType* base);
 
 // An architecture-independent way for describing the size of a type. We don't
 // specify how many bytes these are in the IR.

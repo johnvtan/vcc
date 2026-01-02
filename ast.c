@@ -11,13 +11,45 @@
 //
 typedef struct ParseContext ParseContext;
 typedef struct ParsedSpecifiers ParsedSpecifiers;
-static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs);
-static AstDecl* parse_decl(ParseContext* cx);
-static AstStmt* parse_stmt(ParseContext* cx);
+typedef struct Declarator Declarator;
 
 //
-// Parsing Context definition
+// Parsing declarators and declarations
 //
+
+// Representation of a declarator, which is only used internally during parsing.
+//
+// A declarator contains information related to dervide types, like pointers,
+// arrays, and function declarations. Together with a base type, the declarator
+// can be used to generate the complete declared C type.
+typedef struct Declarator {
+  enum {
+    IDENT,
+    PTR,
+    FN,
+  } ty;
+
+  String* ident;
+  struct Declarator* ptr_inner;
+
+  struct {
+    struct Declarator* declarator;
+
+    // Vec<ParamInfo>
+    Vec* params;
+  } fn;
+} Declarator;
+
+typedef struct {
+  CType* base_type;
+  Declarator* declarator;
+} ParamInfo;
+
+static Declarator* parse_declarator(ParseContext* cx);
+static AstDecl* parse_decl(ParseContext* cx);
+static AstStmt* parse_stmt(ParseContext* cx);
+static Declarator* parse_abstract_declarator(ParseContext* cx);
+static CType* process_abstract_declarator(Declarator* d, CType* base_type);
 
 //
 // Identifier resolution
@@ -534,6 +566,22 @@ static AstExpr* parse_prefix_unary(ParseContext* cx) {
     return e;
   }
 
+  if (match(cx, TK_STAR)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_DEREF;
+    e->unary.expr = parse_prefix_unary(cx);
+    return e;
+  }
+
+  if (match(cx, TK_AMP)) {
+    consume(cx);
+    AstExpr* e = expr(EXPR_UNARY);
+    e->unary.op = UNARY_ADDROF;
+    e->unary.expr = parse_prefix_unary(cx);
+    return e;
+  }
+
   // Parsing a cast -- need to peek ahead to distinguish between casts and
   // nested expressions.
   if (match(cx, TK_OPEN_PAREN) && is_type_specifier(peek_ahead(cx, 1).ty)) {
@@ -543,7 +591,9 @@ static AstExpr* parse_prefix_unary(ParseContext* cx) {
     if (specs.storage_class != SC_NONE) {
       panic("Illegal cast to storage class %u", specs.storage_class);
     }
-    e->cast.target_type = specs.c_type;
+
+    Declarator* d = parse_abstract_declarator(cx);
+    e->cast.target_type = process_abstract_declarator(d, specs.c_type);
     expect(cx, TK_CLOSE_PAREN);
     e->cast.expr = parse_prefix_unary(cx);
     return e;
@@ -894,8 +944,7 @@ static AstStmt* parse_stmt(ParseContext* cx) {
       consume(cx);
     } else if (is_type_specifier(peek(cx).ty)) {
       s->for_.init.ty = FOR_INIT_DECL;
-      s->for_.init.decl =
-          parse_variable_decl(cx, parse_specifiers(cx));  // consumes semicolon
+      s->for_.init.decl = parse_decl(cx);  // consumes semicolon
       if (s->for_.init.decl->ty != AST_DECL_VAR) {
         panic("Only variable declarations allowed in for init", 1);
       }
@@ -953,58 +1002,205 @@ static AstStmt* parse_stmt(ParseContext* cx) {
   return s;
 }
 
-typedef struct {
-  // Vec<String>
-  Vec* idents;
-
-  // Vec<CType>
-  Vec* c_types;
-} ParameterList;
-
-static ParameterList parse_parameter_list(ParseContext* cx,
-                                          Hashmap* ident_map) {
-  ParameterList param_list = {
-      .idents = vec_new(sizeof(String)),
-      .c_types = vec_new(sizeof(CType)),
-  };
-
-  expect(cx, TK_OPEN_PAREN);
-  if (match(cx, TK_VOID)) {
+static Declarator* parse_simple_declarator(ParseContext* cx) {
+  // Parse simple declarator
+  if (match(cx, TK_OPEN_PAREN)) {
     consume(cx);
+    Declarator* d = parse_declarator(cx);
     expect(cx, TK_CLOSE_PAREN);
-    return param_list;
+    return d;
   }
 
-  while (true) {
-    ParsedSpecifiers specs = parse_specifiers(cx);
-    Token t = expect(cx, TK_IDENT);
-    if (specs.storage_class != SC_NONE) {
-      panic("Function params must be non static non extern, %s",
-            cstring(t.content));
+  Token ident = expect(cx, TK_IDENT);
+  Declarator* d = calloc(1, sizeof(Declarator));
+  d->ty = IDENT;
+  d->ident = ident.content;
+  return d;
+}
+
+static Declarator* parse_declarator(ParseContext* cx) {
+  if (match(cx, TK_STAR)) {
+    consume(cx);
+    Declarator* d = calloc(1, sizeof(Declarator));
+    d->ty = PTR;
+    d->ptr_inner = parse_declarator(cx);
+    return d;
+  }
+
+  Declarator* simple = parse_simple_declarator(cx);
+  if (!match(cx, TK_OPEN_PAREN)) {
+    return simple;
+  }
+
+  // Found open paren, this is a function declarator.
+  expect(cx, TK_OPEN_PAREN);
+  Declarator* d = calloc(1, sizeof(Declarator));
+  d->ty = FN;
+  d->fn.declarator = simple;
+  d->fn.params = vec_new(sizeof(ParamInfo));
+
+  if (match(cx, TK_VOID)) {
+    consume(cx);
+  } else {
+    while (true) {
+      // parse each parameter
+      ParsedSpecifiers specs = parse_specifiers(cx);
+      if (specs.storage_class != SC_NONE) {
+        panic("Parameter may not have storage class", 1)
+      }
+
+      ParamInfo* p = vec_push_empty(d->fn.params);
+      p->base_type = specs.c_type;
+      p->declarator = parse_declarator(cx);
+
+      if (match(cx, TK_COMMA)) {
+        consume(cx);
+        continue;
+      } else if (match(cx, TK_CLOSE_PAREN)) {
+        break;
+      } else {
+        panic("Unexpected token in parameter list: %s",
+              cstring(peek(cx).content));
+      }
     }
-
-    vec_push(param_list.c_types, specs.c_type);
-
-    // In general, we check for redeclarations in typechecking, but
-    // for function parameters we check here so that we can then
-    // generate a unique var name for each parameter.
-    if (hashmap_get(ident_map, t.content) != NULL) {
-      panic("Function parameter %s redeclared", cstring(t.content));
-    }
-
-    // Update identifier resolution.
-    String* ident = string_format("%s.%u", cstring(t.content), cx->var_count++);
-    vec_push(param_list.idents, ident);
-    hashmap_put(ident_map, t.content, new_ident_info(ident, false, cx->scope));
-
-    if (match(cx, TK_CLOSE_PAREN)) {
-      break;
-    }
-    expect(cx, TK_COMMA);
   }
 
   expect(cx, TK_CLOSE_PAREN);
-  return param_list;
+  return d;
+}
+
+// Parse an abstract declarator, used in cast expressions.
+// We reuse a subset of the Declarator struct for this.
+// Currently, this should only be a PTR declarator, never a function
+// or ident. It may be arbitrarily nested but the innermost ptr_ref may
+// be NULL.
+static Declarator* parse_abstract_declarator(ParseContext* cx) {
+  if (match(cx, TK_STAR)) {
+    consume(cx);
+    Declarator* d = calloc(1, sizeof(Declarator));
+    d->ty = PTR;
+    d->ptr_inner = parse_abstract_declarator(cx);
+    return d;
+  }
+
+  if (match(cx, TK_OPEN_PAREN)) {
+    consume(cx);
+    Declarator* d = parse_abstract_declarator(cx);
+    expect(cx, TK_CLOSE_PAREN);
+    return d;
+  }
+
+  return NULL;
+}
+
+static CType* process_abstract_declarator(Declarator* d, CType* base_type) {
+  if (d == NULL) {
+    return base_type;
+  }
+
+  assert(d->ty == PTR);
+  return process_abstract_declarator(d->ptr_inner, pointer_to(base_type));
+}
+
+typedef struct {
+  String* name;
+  CType* c_type;
+
+  // Vec<String> with parameter names
+  // if c_type.ty == CTYPE_FN
+  Vec* fn_params;
+} ProcessedDeclarator;
+
+// Now process each declarator to determine the full CType and the name
+// idenifying the declarator.
+ProcessedDeclarator process_declarator(Declarator* d, CType* base_type) {
+  switch (d->ty) {
+    case IDENT:
+      return (ProcessedDeclarator){.c_type = base_type, .name = d->ident};
+    case PTR:
+      return process_declarator(d->ptr_inner, pointer_to(base_type));
+    case FN: {
+      if (d->fn.declarator->ty != IDENT) {
+        panic("Additional derived types on functions not supported", 1);
+      }
+
+      Vec* param_types = vec_new(sizeof(CType));
+      Vec* param_names = vec_new(sizeof(String));
+
+      vec_for_each(d->fn.params, ParamInfo, param) {
+        ProcessedDeclarator processed_param =
+            process_declarator(iter.param->declarator, iter.param->base_type);
+        if (processed_param.c_type->ty == CTYPE_FN) {
+          // TODO: if we're trying to filter out function pointers, shouldn't
+          // this check against CTYPE_PTR? Or maybe it's fine because we only
+          // allow the fn declarator to be an ident.
+          panic("Functions not allowed for parameters", 1);
+        }
+
+        vec_push(param_types, processed_param.c_type);
+        vec_push(param_names, processed_param.name);
+      }
+
+      return (ProcessedDeclarator){
+          .c_type = function_type(base_type, param_types),
+          .name = d->fn.declarator->ident,
+          .fn_params = param_names,
+      };
+    }
+  }
+
+  assert(false);
+}
+
+// Resolves a declaration for a variable with |var_name| and specifiers |specs|.
+// This checks for any conflicting declarations and updates |cx->scope| with the
+// new declaration.
+//
+// Returns the unique name for the variable declaration.
+static String* resolve_variable_decl(ParseContext* cx,
+                                     StorageClass storage_class,
+                                     String* var_name) {
+  if (at_top_level(cx)) {
+    // Handle file scope variable declaration.
+    if (!hashmap_get(cx->scope->map, var_name)) {
+      hashmap_put(cx->scope->map, var_name,
+                  new_ident_info(var_name, true, cx->scope));
+    }
+    return var_name;
+  }
+
+  // Handle block scope variable declaration.
+
+  // Check against any previous declarations from the current scope.
+  IdentifierInfo* prev_decl = hashmap_get(cx->scope->map, var_name);
+  if (prev_decl) {
+    // Previous declaration found in current scope. Verify that linkage doesn't
+    // conflict with new declaration.
+
+    // In order for multiple declarations in the same scope to be valid, they
+    // must both be extern and have linkage, meaning they refer to the same
+    // object.
+    bool valid = prev_decl->has_linkage && storage_class == SC_EXTERN;
+    if (!valid) {
+      panic("Found redeclared variable %s within same scope",
+            cstring(var_name));
+    }
+  }
+
+  // This means no other declarations in the current scope.
+  if (storage_class == SC_EXTERN) {
+    // extern variables can't be renamed and have linkage.
+    hashmap_put(cx->scope->map, var_name,
+                new_ident_info(var_name, true, cx->scope));
+    return var_name;
+  }
+
+  // All other variable declarations get their own unique name.
+  String* unique_var_name =
+      string_format("%s.%u", cstring(var_name), cx->var_count++);
+  hashmap_put(cx->scope->map, var_name,
+              new_ident_info(unique_var_name, false, cx->scope));
+  return unique_var_name;
 }
 
 // Parses the function signature with |ident_map|. This |ident_map| should
@@ -1013,25 +1209,30 @@ static ParameterList parse_parameter_list(ParseContext* cx,
 //
 // NOTE: cx->scope still points to the scope in which the function is declared.
 // It is essentially the parent of the scope that contains |ident_map|.
-static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map,
-                                         ParsedSpecifiers specs) {
-  Token t = expect(cx, TK_IDENT);  // t should contain the function's name.
+static AstDecl* do_function_signature(ParseContext* cx,
+                                      ProcessedDeclarator declarator,
+                                      StorageClass storage_class,
+                                      Hashmap* ident_map) {
+  assert(declarator.c_type->ty == CTYPE_FN);
 
-  // Disallow static functions declared at block scope.
-  if (specs.storage_class == SC_STATIC && !at_top_level(cx)) {
-    panic("Found static function %s at block scope", cstring(t.content));
+  if (!at_top_level(cx) && storage_class == SC_STATIC) {
+    panic("Static function declaration at block scope for %s not allowed",
+          cstring(declarator.name));
   }
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_FN;
+  decl->storage_class = storage_class;
+  decl->c_type = declarator.c_type;
+  decl->fn.name = declarator.name;
 
-  decl->fn.name = t.content;
-  ParameterList param_list = parse_parameter_list(cx, ident_map);
-  decl->fn.param_names = param_list.idents;
-  decl->storage_class = specs.storage_class;
-  decl->c_type = function_type(specs.c_type, param_list.c_types);
+  // Note: these will be different from the ones in the processed
+  // declarator because we will uniquify each param name before adding
+  // them to the decl.
+  decl->fn.param_names = vec_new(sizeof(String));
 
   // Resolve function identifier.
+  assert(decl->fn.name);
   ResolvedIdentifier resolved = resolve_identifier(cx->scope, decl->fn.name);
   if (resolved.info) {
     // TODO: redundant check?
@@ -1048,18 +1249,46 @@ static AstDecl* parse_function_signature(ParseContext* cx, Hashmap* ident_map,
                 new_ident_info(decl->fn.name, true, cx->scope));
   }
 
+  //
+  // Update ident_map with param_names.
+  //
+  vec_for_each(declarator.fn_params, String, orig_param) {
+    // In general, we check for redeclarations in typechecking, but
+    // for function parameters we check here so that we can then
+    // generate a unique var name for each parameter.
+    if (hashmap_get(ident_map, iter.orig_param) != NULL) {
+      panic("Function parameter %s redeclared", cstring(iter.orig_param));
+    }
+
+    // Update identifier resolution with uniqified param name.
+    String* unique =
+        string_format("%s.%u", cstring(iter.orig_param), cx->var_count++);
+
+    // Fill out the param name list in decl with the unique names.
+    vec_push(decl->fn.param_names, unique);
+    hashmap_put(ident_map, iter.orig_param,
+                new_ident_info(unique, false, cx->scope));
+  }
+
   return decl;
 }
 
-static AstDecl* parse_function(ParseContext* cx, ParsedSpecifiers specs) {
+static AstDecl* do_function_decl(ParseContext* cx,
+                                 ProcessedDeclarator declarator,
+                                 StorageClass storage_class) {
   Hashmap* ident_map = hashmap_new();
-  AstDecl* decl = parse_function_signature(cx, ident_map, specs);
+  AstDecl* decl =
+      do_function_signature(cx, declarator, storage_class, ident_map);
   if (match(cx, TK_SEMICOLON)) {
-    // Just a function signature, no body.
+    // Function signature only -- return early.
     consume(cx);
     return decl;
   }
-  // Parse function body
+
+  //
+  // Parse function body now.
+  //
+
   cx->curr_fn = decl->fn.name;
 
   if (!match(cx, TK_OPEN_BRACE)) {
@@ -1086,68 +1315,21 @@ static AstDecl* parse_function(ParseContext* cx, ParsedSpecifiers specs) {
   return decl;
 }
 
-// Resolves a declaration for a variable with |var_name| and specifiers |specs|.
-// This checks for any conflicting declarations and updates |cx->scope| with the
-// new declaration.
-//
-// Returns the unique name for the variable declaration.
-static String* resolve_variable_decl(ParseContext* cx, ParsedSpecifiers specs,
-                                     String* var_name) {
-  if (at_top_level(cx)) {
-    // Handle file scope variable declaration.
-    if (!hashmap_get(cx->scope->map, var_name)) {
-      hashmap_put(cx->scope->map, var_name,
-                  new_ident_info(var_name, true, cx->scope));
-    }
-    return var_name;
-  }
-
-  // Handle block scope variable declaration.
-
-  // Check against any previous declarations from the current scope.
-  IdentifierInfo* prev_decl = hashmap_get(cx->scope->map, var_name);
-  if (prev_decl) {
-    // Previous declaration found in current scope. Verify that linkage doesn't
-    // conflict with new declaration.
-
-    // In order for multiple declarations in the same scope to be valid, they
-    // must both be extern and have linkage, meaning they refer to the same
-    // object.
-    bool valid = prev_decl->has_linkage && specs.storage_class == SC_EXTERN;
-    if (!valid) {
-      panic("Found redeclared variable %s within same scope",
-            cstring(var_name));
-    }
-  }
-
-  // This means no other declarations in the current scope.
-  if (specs.storage_class == SC_EXTERN) {
-    // extern variables can't be renamed and have linkage.
-    hashmap_put(cx->scope->map, var_name,
-                new_ident_info(var_name, true, cx->scope));
-    return var_name;
-  }
-
-  // All other variable declarations get their own unique name.
-  String* unique_var_name =
-      string_format("%s.%u", cstring(var_name), cx->var_count++);
-  hashmap_put(cx->scope->map, var_name,
-              new_ident_info(unique_var_name, false, cx->scope));
-  return unique_var_name;
-}
-
-static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
-  Token t = expect(cx, TK_IDENT);
+static AstDecl* do_variable_decl(ParseContext* cx,
+                                 ProcessedDeclarator declarator,
+                                 StorageClass storage_class) {
+  assert(declarator.c_type->ty != CTYPE_FN);
 
   // This will check cx->scope for previous declarations and
   // update cx->scope with the new declaration.
-  String* unique_var_name = resolve_variable_decl(cx, specs, t.content);
+  String* unique_var_name =
+      resolve_variable_decl(cx, storage_class, declarator.name);
 
   AstDecl* decl = calloc(1, sizeof(AstDecl));
   decl->ty = AST_DECL_VAR;
   decl->var.name = unique_var_name;
-  decl->storage_class = specs.storage_class;
-  decl->c_type = specs.c_type;
+  decl->storage_class = storage_class;
+  decl->c_type = declarator.c_type;
 
   // Parse initializer if it exists.
   if (peek(cx).ty == TK_EQ) {
@@ -1161,10 +1343,14 @@ static AstDecl* parse_variable_decl(ParseContext* cx, ParsedSpecifiers specs) {
 
 static AstDecl* parse_decl(ParseContext* cx) {
   ParsedSpecifiers specs = parse_specifiers(cx);
-  if (peek_ahead(cx, 1).ty == TK_OPEN_PAREN) {
-    return parse_function(cx, specs);
+  Declarator* declarator = parse_declarator(cx);
+  ProcessedDeclarator processed = process_declarator(declarator, specs.c_type);
+
+  if (processed.c_type->ty == CTYPE_FN) {
+    return do_function_decl(cx, processed, specs.storage_class);
   }
-  return parse_variable_decl(cx, specs);
+
+  return do_variable_decl(cx, processed, specs.storage_class);
 }
 
 AstProgram* parse_ast(Vec* tokens) {

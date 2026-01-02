@@ -44,6 +44,8 @@ struct AstExpr {
         UNARY_PREDEC,
         UNARY_POSTINC,
         UNARY_POSTDEC,
+        UNARY_ADDROF,
+        UNARY_DEREF,
       } op;
       AstExpr* expr;
     } unary;

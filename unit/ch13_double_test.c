@@ -1,17 +1,4 @@
-#include <assert.h>
-#include <errno.h>
-#include <limits.h>
-#include <stdio.h>
-#include <vcc/ast.h>
-#include <vcc/gen_x64.h>
-#include <vcc/ir.h>
-#include <vcc/lex.h>
-#include <vcc/string.h>
-#include <vcc/typecheck.h>
-
-#define R(...) #__VA_ARGS__
-
-#define TEST(name) printf("=== Test " #name " ===\n");
+#include "test_helpers.h"
 
 void all_tests(void) {
   TEST(double_kw) {
@@ -146,7 +133,7 @@ void all_tests(void) {
     AstDecl* main_func = vec_get(ast->decls, 0);
     assert(main_func->ty == AST_DECL_FN);
     assert(string_eq2(main_func->fn.name, "main"));
-    assert(main_func->fn.return_type == TYPE_INT);
+    assert(main_func->fn.return_type->ty == CTYPE_INT);
 
     AstBlockItem* b = vec_get(main_func->fn.body, 0);
     assert(b->ty == BLOCK_DECL);
@@ -156,12 +143,12 @@ void all_tests(void) {
 
     const char* kUniqueVarName = "x.0";
     assert(string_eq2(double_x->var.name, kUniqueVarName));
-    assert(double_x->var.c_type == TYPE_DOUBLE);
+    assert(double_x->var.c_type->ty == CTYPE_DOUBLE);
 
     AstExpr* init = double_x->var.init;
     assert(init);
     assert(init->ty == EXPR_CONST);
-    assert(init->const_.c_type == TYPE_DOUBLE);
+    assert(init->const_.c_type->ty == CTYPE_DOUBLE);
     assert(init->const_.numeric.double_ == 3.0);
 
     SymbolTable* symbol_table = typecheck_ast(ast);
@@ -171,17 +158,17 @@ void all_tests(void) {
         hashmap_get(symbol_table->map, string_from(kUniqueVarName));
     assert(entry);
     assert(entry->ty == ST_LOCAL_VAR);
-    assert(entry->local.c_type == TYPE_DOUBLE);
+    assert(entry->local.c_type->ty == CTYPE_DOUBLE);
 
     IrProgram* ir = gen_ir(ast, symbol_table);
-    x64_Program* asm_prog = generate_x86(ir);
+    x64_Program* asm_prog = generate_x64(ir);
     assert(asm_prog);
     assert(asm_prog->static_constants);
     assert(asm_prog->static_constants->len == 1);
 
     x64_StaticConst* sc = vec_get(asm_prog->static_constants, 0);
     assert(sc->alignment == 8);
-    assert(sc->init.numeric.double_ == 3.0);
+    assert(sc->init_val.double_ == 3.0);
   }
 
   TEST(implicit_conversion_to_double_test) {
@@ -202,7 +189,7 @@ void all_tests(void) {
         hashmap_get(symbol_table->map, string_from("x.0"));
     assert(entry);
     assert(entry->ty == ST_LOCAL_VAR);
-    assert(entry->local.c_type == TYPE_DOUBLE);
+    assert(entry->local.c_type->ty == CTYPE_DOUBLE);
 
     AstDecl* main_func = vec_get(ast->decls, 0);
     AstBlockItem* b = vec_get(main_func->fn.body, 0);
@@ -210,16 +197,16 @@ void all_tests(void) {
 
     AstDecl* var_decl = b->decl;
     assert(var_decl->ty == AST_DECL_VAR);
-    assert(var_decl->var.c_type == TYPE_DOUBLE);
+    assert(var_decl->var.c_type->ty == CTYPE_DOUBLE);
     assert(string_eq2(var_decl->var.name, "x.0"));
 
     AstExpr* init = var_decl->var.init;
     assert(init->ty == EXPR_CAST);
-    assert(init->cast.target_type == TYPE_DOUBLE);
+    assert(init->cast.target_type->ty == CTYPE_DOUBLE);
 
     AstExpr* const_init = init->cast.expr;
     assert(const_init->ty == EXPR_CONST);
-    assert(const_init->const_.c_type == TYPE_UINT);
+    assert(const_init->const_.c_type->ty == CTYPE_UINT);
     assert(const_init->const_.numeric.int_ == 1);
 
     // check generated IR for UINT_TO_DOUBLE instruction
@@ -258,7 +245,7 @@ void all_tests(void) {
     AstExpr* init = static_x->var.init;
     assert(init);
     assert(init->ty == EXPR_CONST);
-    assert(init->const_.c_type == TYPE_DOUBLE);
+    assert(init->const_.c_type->ty == CTYPE_DOUBLE);
     assert(init->const_.numeric.double_ == 3.0);
 
     SymbolTableEntry* entry = hashmap_get(symbol_table->map, string_from("x"));
@@ -267,7 +254,7 @@ void all_tests(void) {
 
     assert(entry->static_.global == false);
     assert(entry->static_.init.ty == INIT_HAS_VALUE);
-    assert(entry->static_.init.c_type == TYPE_DOUBLE);
+    assert(entry->static_.init.c_type->ty == CTYPE_DOUBLE);
     assert(entry->static_.init.numeric.double_ == 3.0);
   }
 

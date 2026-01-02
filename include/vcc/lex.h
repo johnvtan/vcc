@@ -29,6 +29,7 @@ typedef enum {
   TK_SLASH,
   TK_PERCENT,
   TK_BANG,
+  TK_AMP,
   TK_AMPAMP,
   TK_PIPEPIPE,
   TK_EQEQ,
