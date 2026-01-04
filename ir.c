@@ -339,6 +339,7 @@ static IrVal* gen_assign(Context* cx, AstExpr* expr) {
   CType* rhs_type = expr->binary.rhs->c_type;
 
   if (!c_type_eq(lhs_type, rhs_type)) {
+    // TODO: can we rewrite this to be somewhere else?
     CType* common_type = get_common_type(lhs_type, rhs_type);
 
     IrVal* intermediate_dst = temp(cx, common_type);

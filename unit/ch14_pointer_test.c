@@ -155,6 +155,25 @@ int main(void) {
       assert(deref->unary.op == UNARY_DEREF);
     }
   }
+
+  TEST("validate binary ok") {
+    const char* prog = R(int main(void) {
+      int* x;
+      int* y;
+      x == y;
+      x != y;
+      !x;
+      !y;
+      x&& y;
+      x || y;
+      x == 0;
+      y != 0;
+      x = 1 ? y : 0;
+    });
+    AstProgram* ast = parse_ast(lex(string_from(prog)));
+    SymbolTable* st = typecheck_ast(ast);
+    assert(st);
+  }
   printf("Ch 14: all tests pass!\n");
   return 0;
 }

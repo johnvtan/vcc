@@ -19,7 +19,23 @@ static void typecheck_expr(Context* cx, AstExpr* expr);
 // Type conversion helpers.
 //
 
-static AstExpr* cast(AstExpr* e, CType* target_type) {
+static void check_conversion_allowed(CType* from, CType* to) {
+  if (is_float(from) && to->ty == CTYPE_PTR) {
+    panic("Casting double to pointer is illegal", 1);
+  }
+
+  if (from->ty == CTYPE_PTR && is_float(to)) {
+    panic("Casting pointer to double is illegal", 1);
+  }
+}
+static AstExpr* convert_to(AstExpr* e, CType* target_type) {
+  assert(e->c_type->ty != CTYPE_NONE);
+  if (c_type_eq(e->c_type, target_type)) {
+    return e;
+  }
+
+  check_conversion_allowed(e->c_type, target_type);
+
   AstExpr* cast_expr = calloc(1, sizeof(AstExpr));
   assert(!c_type_eq(e->c_type, target_type));
   cast_expr->ty = EXPR_CAST;
@@ -29,14 +45,6 @@ static AstExpr* cast(AstExpr* e, CType* target_type) {
   cast_expr->cast.target_type = target_type;
   cast_expr->c_type = target_type;
   return cast_expr;
-}
-
-static AstExpr* convert_to(AstExpr* e, CType* target_type) {
-  assert(e->c_type->ty != CTYPE_NONE);
-  if (c_type_eq(e->c_type, target_type)) {
-    return e;
-  }
-  return cast(e, target_type);
 }
 
 static NumericValue cast_numeric_value(NumericValue val, CType* from,
@@ -57,6 +65,12 @@ static NumericValue cast_numeric_value(NumericValue val, CType* from,
         return (NumericValue){.int_ = (unsigned long)val.int_};
       case CTYPE_DOUBLE:
         return (NumericValue){.double_ = (double)val.int_};
+      case CTYPE_PTR: {
+        if (val.int_ != 0) {
+          panic("Cannot cast non-zero numeric value to pointer.", 1)
+        }
+        return val;
+      }
       case CTYPE_FN:
       case CTYPE_NONE:
         assert(false);
@@ -75,6 +89,7 @@ static NumericValue cast_numeric_value(NumericValue val, CType* from,
       case CTYPE_DOUBLE:
         return (NumericValue){.double_ = (double)val.double_};
       case CTYPE_FN:
+      case CTYPE_PTR:
       case CTYPE_NONE:
         assert(false);
     }
@@ -99,6 +114,7 @@ static StaticInit convert_static_init_to(StaticInit init, CType* target_type) {
   if (c_type_eq(init.c_type, target_type)) {
     return init;
   }
+
   return (StaticInit){
       .c_type = target_type,
       .numeric = cast_numeric_value(init.numeric, init.c_type, target_type)};
@@ -113,6 +129,46 @@ static StaticInit to_static_init(AstExpr* e) {
   };
   return ret;
 }
+
+static bool is_null_pointer(AstExpr* e) {
+  if (e->ty != EXPR_CONST) {
+    return false;
+  }
+
+  if (!is_integer(e->const_.c_type)) {
+    return false;
+  }
+
+  return e->const_.numeric.int_ == 0;
+}
+
+static CType* get_common_pointer_type(AstExpr* e1, AstExpr* e2) {
+  assert(e1->c_type->ty == CTYPE_PTR || e2->c_type->ty == CTYPE_PTR);
+  if (c_type_eq(e1->c_type, e2->c_type)) {
+    return e1->c_type;
+  }
+
+  if (is_null_pointer(e1)) {
+    return e2->c_type;
+  }
+
+  if (is_null_pointer(e2)) {
+    return e1->c_type;
+  }
+
+  panic("Cannot get common pointer type for %u %u", e1->c_type->ty,
+        e2->c_type->ty);
+}
+
+static CType* get_common_expr_type(AstExpr* e1, AstExpr* e2) {
+  if (e1->c_type->ty == CTYPE_PTR || e2->c_type->ty == CTYPE_PTR) {
+    return get_common_pointer_type(e1, e2);
+  }
+
+  return get_common_type(e1->c_type, e2->c_type);
+}
+
+static AstExpr* convert_by_assignment(AstExpr* e, CType* target_type);
 
 //
 // Symbol table helpers
@@ -285,29 +341,39 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   symbol_table_put(symbol_table, decl->var.name, new_entry);
   if (decl->var.init) {
     typecheck_expr(cx, decl->var.init);
-    decl->var.init = convert_to(decl->var.init, decl->c_type);
+    decl->var.init = convert_by_assignment(decl->var.init, decl->c_type);
   }
 }
 
-static void check_lvalue(AstExpr* expr) {
-  if (expr->ty != EXPR_VAR) {
-    panic("Expected lvalue but got ty %u", expr->ty);
-  }
-}
-
-static bool is_assign(AstExpr* e) {
-  assert(e->ty == EXPR_BINARY);
-  switch (e->binary.op) {
-    case BINARY_ASSIGN:
-    case BINARY_ADD_ASSIGN:
-    case BINARY_SUB_ASSIGN:
-    case BINARY_DIV_ASSIGN:
-    case BINARY_MUL_ASSIGN:
-    case BINARY_REM_ASSIGN:
-      return true;
+static void check_lvalue(const AstExpr* expr) {
+  switch (expr->ty) {
+    case EXPR_VAR:
+      break;
+    case EXPR_UNARY: {
+      if (expr->unary.op != UNARY_DEREF) {
+        panic("Expected deref but got ty %u", expr->unary.op);
+      }
+      break;
+    }
     default:
-      return false;
+      panic("Expected lvalue but got ty %u", expr->ty);
   }
+}
+
+static AstExpr* convert_by_assignment(AstExpr* e, CType* target_type) {
+  if (c_type_eq(e->c_type, target_type)) {
+    return e;
+  }
+
+  if (is_arithmetic(e->c_type) && is_arithmetic(target_type)) {
+    return convert_to(e, target_type);
+  }
+
+  if (is_null_pointer(e) && target_type->ty == CTYPE_PTR) {
+    return convert_to(e, target_type);
+  }
+
+  panic("Cannot convert type for assignment", 1);
 }
 
 static void typecheck_expr(Context* cx, AstExpr* expr) {
@@ -332,6 +398,10 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       // TODO: when implementing bitwise, need to enforce that bitwise
       // complement (~) only accepts integer arguments.
       typecheck_expr(cx, expr->unary.expr);
+
+      // By default, set the type of the unary op to the operand's type.
+      // Some unary operators, like AddrOf and Deref, will change expr->c_type.
+      expr->c_type = expr->unary.expr->c_type;
       switch (expr->unary.op) {
         case UNARY_POSTINC:
         case UNARY_POSTDEC:
@@ -344,15 +414,34 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
             panic("Unary complement operand must be an integer", 1);
           }
           break;
-        default:
+        case UNARY_NEG: {
+          if (!is_arithmetic(expr->unary.expr->c_type)) {
+            panic("Unary neg operand must be arithmetic", 1);
+          }
+          break;
+        }
+        case UNARY_ADDROF: {
+          const AstExpr* lvalue = expr->unary.expr;
+          check_lvalue(lvalue);
+          expr->c_type = pointer_to(lvalue->c_type);
+          break;
+        }
+        case UNARY_DEREF: {
+          const AstExpr* ref = expr->unary.expr;
+          if (ref->c_type->ty != CTYPE_PTR) {
+            panic("Deref must operate on pointer type, but got %u.",
+                  ref->c_type->ty);
+          }
+
+          // The type of the deref expression is the type being pointed to.
+          expr->c_type = ref->c_type->ptr_ref;
+          break;
+        }
+        case UNARY_NOT:
+          expr->c_type = basic_data_type(CTYPE_INT);
           break;
       }
 
-      if (expr->unary.op == UNARY_NOT) {
-        expr->c_type = basic_data_type(CTYPE_INT);
-      } else {
-        expr->c_type = expr->unary.expr->c_type;
-      }
       return;
     }
     case EXPR_BINARY: {
@@ -369,48 +458,56 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
           panic("Remainder operator is only valid for integer operands.", 1);
         }
       }
-
-      // For assigns, implicitly convert rhs to lhs type.
-      if (is_assign(expr)) {
-        check_lvalue(expr->binary.lhs);
-
-        // Only convert for simple assigns. Compound assigns will have their
-        // types fixed in ir.c.
-        if (expr->binary.op == BINARY_ASSIGN) {
-          expr->binary.rhs =
-              convert_to(expr->binary.rhs, expr->binary.lhs->c_type);
-        }
-
-        expr->c_type = expr->binary.lhs->c_type;
-        return;
-      }
-
-      // AND and OR don't need to convert operands.
-      if (expr->binary.op == BINARY_AND || expr->binary.op == BINARY_OR) {
-        expr->c_type = basic_data_type(CTYPE_INT);
-        return;
-      }
-
-      // For all other types, implicitly perform conversion to the common type.
-      CType* common_type =
-          get_common_type(expr->binary.lhs->c_type, expr->binary.rhs->c_type);
-      expr->binary.lhs = convert_to(expr->binary.lhs, common_type);
-      expr->binary.rhs = convert_to(expr->binary.rhs, common_type);
       switch (expr->binary.op) {
-        case BINARY_ADD:
-        case BINARY_SUB:
-        case BINARY_REM:
-        case BINARY_MUL:
-        case BINARY_DIV:
-          // Arithmetic operations get the common type
-          expr->c_type = common_type;
-          break;
-        default:
-          // All other comparison operations are always an integer.
+        case BINARY_ADD_ASSIGN:
+        case BINARY_SUB_ASSIGN:
+        case BINARY_MUL_ASSIGN:
+        case BINARY_DIV_ASSIGN:
+        case BINARY_REM_ASSIGN:
+          assert(false);
+        case BINARY_ASSIGN: {
+          // For assigns, implicitly convert rhs to lhs type.
+          check_lvalue(expr->binary.lhs);
+          expr->binary.rhs =
+              convert_by_assignment(expr->binary.rhs, expr->binary.lhs->c_type);
+          expr->c_type = expr->binary.lhs->c_type;
+          return;
+        }
+        case BINARY_AND:
+        case BINARY_OR: {
+          // AND and OR don't need to convert operands.
           expr->c_type = basic_data_type(CTYPE_INT);
-          break;
-      }
+          return;
+        }
+        default: {
+          // For all other types, implicitly perform conversion to the common
+          // type.
+          CType* common_type =
+              get_common_expr_type(expr->binary.lhs, expr->binary.rhs);
 
+          expr->binary.lhs = convert_to(expr->binary.lhs, common_type);
+          expr->binary.rhs = convert_to(expr->binary.rhs, common_type);
+          switch (expr->binary.op) {
+            case BINARY_REM:
+            case BINARY_MUL:
+            case BINARY_DIV: {
+              // rem/mul/div don't allow pointer operands
+              if (common_type->ty == CTYPE_PTR) {
+                panic("Binary operator does not allow pointer operands.", 1);
+              }
+            }
+            case BINARY_ADD:
+            case BINARY_SUB:
+              // Arithmetic operations get the common type
+              expr->c_type = common_type;
+              return;
+            default:
+              // All other comparison operations are always an integer.
+              expr->c_type = basic_data_type(CTYPE_INT);
+              return;
+          }
+        }
+      }
       return;
     }
     case EXPR_FN_CALL: {
@@ -441,7 +538,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       vec_for_each(expr->fn_call.args, AstExpr, arg) {
         typecheck_expr(cx, iter.arg);
         CType* param_type = vec_get(param_types, i++);
-        vec_push(converted_args, convert_to(iter.arg, param_type));
+        vec_push(converted_args, convert_by_assignment(iter.arg, param_type));
       }
 
       expr->fn_call.args = converted_args;
@@ -456,8 +553,8 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
       assert(expr->ternary.then->c_type->ty != CTYPE_NONE);
       assert(expr->ternary.else_->c_type->ty != CTYPE_NONE);
 
-      CType* common_type = get_common_type(expr->ternary.then->c_type,
-                                           expr->ternary.else_->c_type);
+      CType* common_type =
+          get_common_expr_type(expr->ternary.then, expr->ternary.else_);
       expr->ternary.then = convert_to(expr->ternary.then, common_type);
       expr->ternary.else_ = convert_to(expr->ternary.else_, common_type);
       expr->c_type = common_type;
@@ -472,6 +569,7 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
     case EXPR_CAST: {
       // TODO: check if this is a viable cast?
       typecheck_expr(cx, expr->cast.expr);
+      check_conversion_allowed(expr->cast.expr->c_type, expr->cast.target_type);
       expr->c_type = expr->cast.target_type;
       return;
     }
@@ -498,11 +596,14 @@ static String* comptime_const_to_string(CompTimeConst c) {
 
 static void typecheck_statement(Context* cx, AstStmt* stmt) {
   switch (stmt->ty) {
-    case STMT_RETURN:
-    case STMT_EXPR: {
+    case STMT_RETURN: {
       typecheck_expr(cx, stmt->expr);
       assert(cx->curr_fn_return_type != NULL);
-      stmt->expr = convert_to(stmt->expr, cx->curr_fn_return_type);
+      stmt->expr = convert_by_assignment(stmt->expr, cx->curr_fn_return_type);
+      return;
+    }
+    case STMT_EXPR: {
+      typecheck_expr(cx, stmt->expr);
       return;
     }
     case STMT_LABELED: {

@@ -49,6 +49,7 @@ TypeSize get_type_size(CType* ty);
 bool is_signed(CType* ty);
 bool is_integer(CType* ty);
 bool is_float(CType* ty);
+bool is_arithmetic(CType* ty);
 
 typedef union {
   uint64_t int_;

@@ -27,10 +27,14 @@ bool c_type_eq(const CType* c1, const CType* c2) {
   }
 
   if (c1->ty == CTYPE_PTR) {
-    assert(false);  // TODO
+    while (c1->ty == CTYPE_PTR && c2->ty == CTYPE_PTR) {
+      c1 = c1->ptr_ref;
+      c2 = c2->ptr_ref;
+    }
+    assert(c1 && c2);
   }
 
-  return true;
+  return c1->ty == c2->ty;
 }
 
 static CType* new_c_type(CTypeKind ty) {
@@ -94,6 +98,7 @@ bool is_integer(CType* ty) {
 }
 
 bool is_float(CType* ty) { return ty->ty == CTYPE_DOUBLE; }
+bool is_arithmetic(CType* ty) { return is_integer(ty) || is_float(ty); }
 
 CType* get_common_type(CType* t1, CType* t2) {
   if (c_type_eq(t1, t2)) {
