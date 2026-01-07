@@ -8,7 +8,7 @@
 typedef enum {
   X64_OP_IMM,
   X64_OP_REG,
-  X64_OP_STACK,
+  X64_OP_MEMORY,
   X64_OP_LABEL,
   X64_OP_DATA,
 } x64_OperandType;
@@ -24,6 +24,7 @@ typedef enum {
   REG_R10,
   REG_R11,
   REG_SP,
+  REG_BP,
 
   // Note: SSE registers should always come after general purpose registers.
   // It's easier to validate whether a register is a GP or SSE reg that way.
@@ -54,8 +55,9 @@ typedef struct {
   // X64_OP_REG
   x64_RegType reg;
 
-  // X64_OP_STACK
-  int stack;
+  // X64_OP_MEMORY
+  // Note: memory also uses the reg field.
+  int mem_offset;
 
   // X64_OP_LABEL or X64_OP_DATA
   String* ident;
@@ -90,6 +92,7 @@ typedef enum {
   X64_XOR,
   X64_AND,  // bitwise and
   X64_OR,   // bitwise or
+  X64_LEA,  // load effective address
 } x64_InstructionType;
 
 typedef enum {

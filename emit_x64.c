@@ -42,6 +42,27 @@ bool is_sse_reg(x64_RegType reg) { return reg >= REG_XMM0; }
 
 bool is_gp_reg(x64_RegType reg) { return reg < REG_XMM0; }
 
+static const char* kSseRegMap[] = {
+    [REG_XMM0] = "xmm0",   [REG_XMM1] = "xmm1", [REG_XMM2] = "xmm2",
+    [REG_XMM3] = "xmm3",   [REG_XMM4] = "xmm4", [REG_XMM5] = "xmm5",
+    [REG_XMM6] = "xmm6",   [REG_XMM7] = "xmm7", [REG_XMM14] = "xmm14",
+    [REG_XMM15] = "xmm15",
+};
+
+static const char* kQuadRegMap[] = {
+    [REG_AX] = "rax",  [REG_DX] = "rdx", [REG_DI] = "rdi", [REG_CX] = "rcx",
+    [REG_SI] = "rsi",  [REG_R8] = "r8",  [REG_R9] = "r9",  [REG_R10] = "r10",
+    [REG_R11] = "r11", [REG_SP] = "rsp", [REG_BP] = "rbp"
+
+};
+
+static const char* kLongRegMap[] = {
+    [REG_AX] = "eax",   [REG_DX] = "edx", [REG_DI] = "edi", [REG_CX] = "ecx",
+    [REG_SI] = "esi",   [REG_R8] = "r8d", [REG_R9] = "r9d", [REG_R10] = "r10d",
+    [REG_R11] = "r11d", [REG_SP] = "esp", [REG_BP] = "ebp",
+
+};
+
 static void emit_operand(Context* cx, const x64_Operand* op,
                          x64_DataType type) {
   switch (op->ty) {
@@ -58,31 +79,13 @@ static void emit_operand(Context* cx, const x64_Operand* op,
     case X64_OP_REG: {
       const char* reg_str = NULL;
       if (is_sse_reg(op->reg)) {
-        static const char* reg_map[] = {
-            [REG_XMM0] = "xmm0",   [REG_XMM1] = "xmm1", [REG_XMM2] = "xmm2",
-            [REG_XMM3] = "xmm3",   [REG_XMM4] = "xmm4", [REG_XMM5] = "xmm5",
-            [REG_XMM6] = "xmm6",   [REG_XMM7] = "xmm7", [REG_XMM14] = "xmm14",
-            [REG_XMM15] = "xmm15",
-        };
-        reg_str = reg_map[op->reg];
+        reg_str = kSseRegMap[op->reg];
       } else if (type == X64_QUADWORD) {
         assert(is_gp_reg(op->reg));
-        static const char* reg_map[] = {
-            [REG_AX] = "rax", [REG_DX] = "rdx",  [REG_DI] = "rdi",
-            [REG_CX] = "rcx", [REG_SI] = "rsi",  [REG_R8] = "r8",
-            [REG_R9] = "r9",  [REG_R10] = "r10", [REG_R11] = "r11",
-            [REG_SP] = "rsp",
-        };
-        reg_str = reg_map[op->reg];
+        reg_str = kQuadRegMap[op->reg];
       } else if (type == X64_LONGWORD) {
         assert(is_gp_reg(op->reg));
-        static const char* reg_map[] = {
-            [REG_AX] = "eax", [REG_DX] = "edx",   [REG_DI] = "edi",
-            [REG_CX] = "ecx", [REG_SI] = "esi",   [REG_R8] = "r8d",
-            [REG_R9] = "r9d", [REG_R10] = "r10d", [REG_R11] = "r11d",
-            [REG_SP] = "rsp",
-        };
-        reg_str = reg_map[op->reg];
+        reg_str = kLongRegMap[op->reg];
       }
 
       if (reg_str == NULL) {
@@ -91,8 +94,9 @@ static void emit_operand(Context* cx, const x64_Operand* op,
       emit(cx, "%%%s", reg_str);
       break;
     }
-    case X64_OP_STACK: {
-      emit(cx, "%d(%%rbp)", op->stack);
+    case X64_OP_MEMORY: {
+      assert(is_gp_reg(op->reg));
+      emit(cx, "%d(%%%s)", op->mem_offset, kQuadRegMap[op->reg]);
       break;
     }
     case X64_OP_LABEL: {
@@ -304,6 +308,10 @@ static void emit_inst(Context* cx, x64_Instruction* inst) {
       assert(inst->data_type == X64_DOUBLE);
       emit2(cx, "div", inst->r1, inst->r2, inst->data_type);
       break;
+    }
+    case X64_LEA: {
+      assert(inst->data_type == X64_QUADWORD);
+      emit2(cx, "lea", inst->r1, inst->r2, inst->data_type);
     }
   }
 }

@@ -47,6 +47,7 @@ static x64_DataType c_to_data_type(CType* c_type) {
       return X64_LONGWORD;
     case CTYPE_LONG:
     case CTYPE_ULONG:
+    case CTYPE_PTR:
       return X64_QUADWORD;
     case CTYPE_DOUBLE:
       return X64_DOUBLE;
@@ -130,12 +131,15 @@ static inline x64_Operand* reg(x64_RegType ty) {
   return ret;
 }
 
-static x64_Operand* stack(int val) {
+static x64_Operand* memory(x64_RegType reg, int offset) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
-  ret->ty = X64_OP_STACK;
-  ret->stack = val;
+  ret->ty = X64_OP_MEMORY;
+  ret->reg = reg;
+  ret->mem_offset = offset;
   return ret;
 }
+
+static x64_Operand* stack(int offset) { return memory(REG_BP, offset); }
 
 static x64_Operand* data(String* ident, bool constant) {
   x64_Operand* ret = calloc(1, sizeof(x64_Operand));
@@ -225,7 +229,7 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
   assert(ir->ty == IR_VAL_CONST);
   CompTimeConst c = ir->constant;
 
-  if (is_integer(c.c_type)) {
+  if (!is_float(c.c_type)) {
     return imm(c.numeric.int_, is_signed(c.c_type));
   }
 
@@ -233,8 +237,8 @@ static x64_Operand* to_x64_op(Context* cx, IrVal* ir) {
   return data(double_const(cx, c.numeric.double_, 8), true);
 }
 
-static inline bool op_is_stack_or_data(x64_Operand* op) {
-  return op->ty == X64_OP_STACK || op->ty == X64_OP_DATA;
+static inline bool op_is_mem_or_data(x64_Operand* op) {
+  return op->ty == X64_OP_MEMORY || op->ty == X64_OP_DATA;
 }
 
 //
@@ -284,10 +288,10 @@ static inline void jmpcc(Context* cx, x64_ConditionCode cc, String* label) {
 static inline void mov(Context* cx, x64_Operand* r1, x64_Operand* r2,
                        x64_DataType type) {
   // Memory to memory moves require an intermediate move to a register.
-  bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
+  bool is_mem_to_mem = op_is_mem_or_data(r1) && op_is_mem_or_data(r2);
 
   // Can only move 32 bit immediates directly into memory.
-  bool imm_too_large = op_is_stack_or_data(r2) && r1->ty == X64_OP_IMM &&
+  bool imm_too_large = op_is_mem_or_data(r2) && r1->ty == X64_OP_IMM &&
                        r1->imm > (uint64_t)INT_MAX;
 
   // Doubles shouldn't use immediates, sanity check here.
@@ -312,7 +316,7 @@ static void cvttsd2si(Context* cx, x64_Operand* src, x64_Operand* dst,
 
   // The destination for CVTSDD2SI must be a reg, so insert an
   // intermediate move here.
-  assert(dst->ty == X64_OP_STACK);
+  assert(dst->ty == X64_OP_MEMORY);
 
   x64_Operand* fixup = reg(fixup_dst_reg(dst_type));
   instr2(cx, X64_CVTTSD2SI, src, fixup, dst_type);
@@ -334,7 +338,7 @@ static void cvtsi2sd(Context* cx, x64_Operand* src, x64_Operand* dst,
 
   // The destination for CVTSI2SD must be a register, so insert an
   // intermediate move to xmm15 here.
-  assert(dst->ty == X64_OP_STACK);
+  assert(dst->ty == X64_OP_MEMORY);
 
   x64_Operand* fixup = reg(fixup_dst_reg(X64_DOUBLE));
   instr2(cx, X64_CVTSI2SD, src, fixup, src_type);
@@ -349,18 +353,18 @@ static inline x64_Operand* mov_to_reg(Context* cx, x64_Operand* arg,
 }
 
 x64_Operand* zero(Context* cx, CType* c_type) {
-  if (is_integer(c_type)) {
-    static x64_Operand ZERO_INT = {
-        .ty = X64_OP_IMM,
-        .imm = 0,
-    };
-
-    return &ZERO_INT;
+  if (is_float(c_type)) {
+    x64_Operand* xmm0 = reg(REG_XMM0);
+    instr2(cx, X64_XOR, xmm0, xmm0, X64_DOUBLE);
+    return xmm0;
   }
 
-  x64_Operand* xmm0 = reg(REG_XMM0);
-  instr2(cx, X64_XOR, xmm0, xmm0, X64_DOUBLE);
-  return xmm0;
+  static x64_Operand ZERO_INT = {
+      .ty = X64_OP_IMM,
+      .imm = 0,
+  };
+
+  return &ZERO_INT;
 }
 
 static bool imm_bigger_than_int(x64_Operand* op) {
@@ -368,6 +372,14 @@ static bool imm_bigger_than_int(x64_Operand* op) {
 }
 
 static inline void push(Context* cx, x64_Operand* arg, x64_DataType type) {
+  if (arg->ty == X64_OP_REG && arg->reg >= REG_XMM0) {
+    // push doesn't allow SSE registers, so instead manually push using a sub
+    // and movsd.
+    instr2(cx, X64_SUB, imm(8, false), reg(REG_SP), X64_QUADWORD);
+    mov(cx, arg, memory(REG_SP, 0), X64_DOUBLE);
+    return;
+  }
+
   if (imm_bigger_than_int(arg)) {
     arg = mov_to_reg(cx, arg, fixup_src_reg(type), type);
   }
@@ -418,7 +430,7 @@ static void binary_inner(Context* cx, x64_InstructionType instr_ty,
     switch (instr_ty) {
       case X64_ADD:
       case X64_SUB: {
-        bool is_mem_to_mem = op_is_stack_or_data(r1) && op_is_stack_or_data(r2);
+        bool is_mem_to_mem = op_is_mem_or_data(r1) && op_is_mem_or_data(r2);
         if (is_mem_to_mem || imm_bigger_than_int(r1)) {
           r1 = mov_to_reg(cx, r1, fixup_src_reg(type), type);
         }
@@ -431,7 +443,7 @@ static void binary_inner(Context* cx, x64_InstructionType instr_ty,
           r1 = mov_to_reg(cx, r1, fixup_src_reg(type), type);
         }
 
-        if (op_is_stack_or_data(r2)) {
+        if (op_is_mem_or_data(r2)) {
           // mul can't use a stack location as its r2
           x64_Operand* fixup = reg(fixup_dst_reg(type));
           instr2(cx, X64_MOV, r2, fixup, type);
@@ -444,7 +456,7 @@ static void binary_inner(Context* cx, x64_InstructionType instr_ty,
       }
       case X64_CMP: {
         const bool requires_fixup =
-            (op_is_stack_or_data(r1) && op_is_stack_or_data(r2)) ||
+            (op_is_mem_or_data(r1) && op_is_mem_or_data(r2)) ||
             imm_bigger_than_int(r1);
 
         if (requires_fixup) {
@@ -544,7 +556,7 @@ static void movsx(Context* cx, x64_Operand* src, x64_Operand* dst,
     src = mov_to_reg(cx, src, fixup_src_reg(from), from);
   }
 
-  if (op_is_stack_or_data(dst)) {
+  if (op_is_mem_or_data(dst)) {
     x64_Operand* fixup = reg(fixup_dst_reg(to));
     instr2(cx, X64_MOVSX, src, fixup, to);
     instr2(cx, X64_MOV, fixup, dst, to);
@@ -749,7 +761,7 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         break;
       }
       case IR_UNARY_NEG: {
-        if (is_integer(ir_val_c_type(&cx, ir->r1))) {
+        if (!is_float(ir_val_c_type(&cx, ir->r1))) {
           unary(&cx, X64_NEG, ir);
         } else {
           assert(ir_val_c_type(&cx, ir->r1)->ty == CTYPE_DOUBLE);
@@ -1031,6 +1043,39 @@ static x64_Function* convert_function(IrFunction* ir_function, SymbolTable* st,
         mov(&cx, ret, dst, type);
         break;
       }
+      case IR_LOAD: {
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+        x64_DataType dst_type = ir_val_to_data_type(&cx, ir->dst);
+        mov(&cx, src, reg(REG_AX), X64_QUADWORD);
+        mov(&cx, memory(REG_AX, 0), dst, dst_type);
+        break;
+      }
+      case IR_STORE: {
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+        x64_DataType src_type = ir_val_to_data_type(&cx, ir->r1);
+
+        // dst contains the pointer
+        mov(&cx, dst, reg(REG_AX), X64_QUADWORD);
+        mov(&cx, src, memory(REG_AX, 0), src_type);
+        break;
+      }
+      case IR_GET_ADDR: {
+        x64_Operand* src = to_x64_op(&cx, ir->r1);
+        x64_Operand* dst = to_x64_op(&cx, ir->dst);
+        x64_DataType dst_type = ir_val_to_data_type(&cx, ir->dst);
+
+        assert(src->ty == X64_OP_MEMORY || src->ty == X64_OP_DATA);
+        if (dst->ty == X64_OP_REG) {
+          instr2(&cx, X64_LEA, src, dst, dst_type);
+        } else {
+          x64_Operand* fixup = reg(fixup_dst_reg(dst_type));
+          instr2(&cx, X64_LEA, src, fixup, dst_type);
+          mov(&cx, fixup, dst, dst_type);
+        }
+        break;
+      }
       default:
         panic("Unexpected IR instruction type: %lu", iter.ir_instr->ty);
     }
@@ -1074,6 +1119,7 @@ x64_StaticVariable* convert_static_variable(IrStaticVariable* ir) {
       ret->is_signed = true;
     case CTYPE_ULONG:
     case CTYPE_DOUBLE:
+    case CTYPE_PTR:
       ret->alignment = 8;
       break;
     case CTYPE_NONE:

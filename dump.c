@@ -5,8 +5,8 @@
   case n:    \
     return #n;
 
-static const char* c_type_to_string(CType* type) {
-  switch (type->ty) {
+static const char* c_type_kind_to_string(CTypeKind kind) {
+  switch (kind) {
     X(CTYPE_NONE);
     X(CTYPE_INT);
     X(CTYPE_UINT);
@@ -15,6 +15,15 @@ static const char* c_type_to_string(CType* type) {
     X(CTYPE_LONG);
     X(CTYPE_PTR);
     X(CTYPE_FN);
+  }
+}
+
+static void dump_c_type(CType* c_type) {
+  printf("%s", c_type_kind_to_string(c_type->ty));
+  if (c_type->ty == CTYPE_PTR) {
+    printf(", ptr={ ");
+    dump_c_type(c_type->ptr_ref);
+    printf(" }");
   }
 }
 
@@ -60,7 +69,8 @@ static const char* ir_type_to_string(IrType type) {
 }
 
 static void dump_numeric(CType* type, NumericValue val) {
-  printf("%s, val=", c_type_to_string(type));
+  dump_c_type(type);
+  printf(", val=");
   switch (type->ty) {
     case CTYPE_INT:
       printf("%d", (int)val.int_);
@@ -94,16 +104,20 @@ static void dump_ir_val(SymbolTable* symbol_table, IrVal* val) {
   SymbolTableEntry* entry = hashmap_get(symbol_table->map, val->var);
   switch (entry->ty) {
     case ST_LOCAL_VAR:
-      printf("{ local=%s type=%s }", cstring(val->var),
-             c_type_to_string(entry->c_type));
+      printf("{ local=%s type=", cstring(val->var));
+      dump_c_type(entry->c_type);
+      printf(" }");
       break;
     case ST_STATIC_VAR:
-      printf("{ static=%s type=%s global=%u }", cstring(val->var),
-             c_type_to_string(entry->c_type), entry->static_.global);
+      printf("{ static=%s global=%u type=", cstring(val->var),
+             entry->static_.global);
+      dump_c_type(entry->c_type);
+      printf(" }");
       break;
     case ST_FN:
-      printf("{ fn=%s ret_type=%s }", cstring(val->var),
-             c_type_to_string(entry->c_type->fn.return_type));
+      printf("{ fn=%s ret_type=", cstring(val->var));
+      dump_c_type(entry->c_type);
+      printf(" }");
       break;
   }
 }
@@ -178,6 +192,7 @@ static const char* x64_instr_type_to_string(x64_InstructionType type) {
     X(X64_XOR);
     X(X64_AND);
     X(X64_OR);
+    X(X64_LEA);
   }
 }
 
@@ -201,6 +216,7 @@ static const char* reg_to_string(x64_RegType type) {
     X(REG_R10);
     X(REG_R11);
     X(REG_SP);
+    X(REG_BP);
     X(REG_XMM0);
     X(REG_XMM1);
     X(REG_XMM2);
@@ -239,8 +255,8 @@ void dump_operand(x64_Operand* op) {
       printf("{ %s }", reg_to_string(op->reg));
       break;
     }
-    case X64_OP_STACK: {
-      printf("{ STACK pos=%d }", op->stack);
+    case X64_OP_MEMORY: {
+      printf("{ MEM reg=%s pos=%d }", reg_to_string(op->reg), op->mem_offset);
       break;
     }
     case X64_OP_LABEL: {

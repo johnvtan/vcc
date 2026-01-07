@@ -68,6 +68,7 @@ TypeSize get_type_size(CType* ty) {
       return SIZE_INT;
     case CTYPE_LONG:
     case CTYPE_ULONG:
+    case CTYPE_PTR:
       return SIZE_LONG;
     default:
       assert(false);
@@ -92,6 +93,7 @@ bool is_integer(CType* ty) {
     case CTYPE_ULONG:
       return true;
     case CTYPE_DOUBLE:
+    case CTYPE_PTR:
     default:
       return false;
   }
