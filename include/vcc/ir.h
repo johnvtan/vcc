@@ -53,6 +53,11 @@ typedef enum {
   IR_LABEL,
 
   IR_FN_CALL,
+
+  // ptr stuff
+  IR_GET_ADDR,
+  IR_LOAD,
+  IR_STORE,
 } IrType;
 
 typedef struct {

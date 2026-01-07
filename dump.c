@@ -13,6 +13,7 @@ static const char* c_type_to_string(CType* type) {
     X(CTYPE_ULONG);
     X(CTYPE_DOUBLE);
     X(CTYPE_LONG);
+    X(CTYPE_PTR);
     X(CTYPE_FN);
   }
 }
@@ -52,6 +53,9 @@ static const char* ir_type_to_string(IrType type) {
     X(IR_LABEL);
 
     X(IR_FN_CALL);
+    X(IR_GET_ADDR);
+    X(IR_LOAD);
+    X(IR_STORE);
   }
 }
 

@@ -123,6 +123,32 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 //
 // Functions that walk the AST and generate IR instructions
 //
+
+// Corresponds to exp_result in the book
+typedef struct {
+  enum {
+    PLAIN,
+    DEREF,
+  } ty;
+
+  IrVal* val;
+} OperandOrDeref;
+
+static OperandOrDeref plain_operand(IrVal* val) {
+  return (OperandOrDeref) { .ty = PLAIN, .val = val};
+}
+
+static OperandOrDeref dereferenced_pointer(IrVal* val) {
+  assert(val->ty != IR_VAL_CONST);
+  return (OperandOrDeref) { .ty = DEREF, .val = val};
+}
+
+// Corresponds to emit_tacky in the book
+static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr);
+
+// Corresponds to emit_tacky_and_convert in the book. Basically just
+// calls gen_expr_inner and converts the returned OperandOrDeref into
+// an IrVal*, emitting a load instruction for dereferenced pointers.
 static IrVal* gen_expr(Context* cx, AstExpr* expr);
 
 static CompTimeConst one(CType* c_type) {
@@ -147,7 +173,7 @@ static CompTimeConst zero(CType* c_type) {
   return ret;
 }
 
-static IrVal* gen_unary(Context* cx, AstExpr* expr) {
+static IrVal* gen_unary_non_ptr(Context* cx, AstExpr* expr) {
   IrVal* operand = gen_expr(cx, expr->unary.expr);
 
   // Handle pre/postinc unary functions
@@ -381,7 +407,7 @@ static void arrange_conditional(Context* cx, IrVal* cond, Vec* then,
   push_inst(cx->out, end_label);
 }
 
-static IrVal* gen_expr(Context* cx, AstExpr* expr) {
+static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr) {
   switch (expr->ty) {
     case EXPR_TERNARY: {
       IrVal* cond = gen_expr(cx, expr->ternary.cond);
@@ -411,7 +437,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
 
       arrange_conditional(cx, cond, then_ir, else_ir);
 
-      return ternary_result;
+      return plain_operand(ternary_result);
     }
     case EXPR_BINARY: {
       // AND and OR are special because they have to short circuit.
@@ -448,7 +474,7 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         // AND_END
         push_inst(cx->out, end_label);
 
-        return result;
+        return plain_operand(result);
       } else if (expr->binary.op == BINARY_OR) {
         IrInstruction true_label = internal_label(".OR_TRUE");
         IrInstruction end_label = internal_label(".OR_END");
@@ -482,19 +508,43 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
         // OR_END
         push_inst(cx->out, end_label);
 
-        return result;
+        return plain_operand(result);
       } else if (is_assign(expr->binary.op)) {
-        return gen_assign(cx, expr);
+        return plain_operand(gen_assign(cx, expr));
       } else {
-        return gen_binary(cx, expr);
+        return plain_operand(gen_binary(cx, expr));
       }
     }
     case EXPR_CONST:
-      return constant(expr->const_);
-    case EXPR_UNARY:
-      return gen_unary(cx, expr);
+      return plain_operand(constant(expr->const_));
+    case EXPR_UNARY: {
+      switch (expr->unary.op) {
+        case UNARY_ADDROF: {
+          OperandOrDeref inner_res = gen_expr_inner(cx, expr->unary.expr);
+          switch (inner_res.ty) {
+            case PLAIN: {
+              IrVal* dst = temp(cx, expr->c_type);
+              push_inst(cx->out, unary(IR_GET_ADDR, inner_res.val, dst));
+              return plain_operand(dst);
+            }
+            case DEREF: {
+              // getting the address of a dereferenced pointer returns the inner value.
+              // This means that the dereference is not evaluated at all.
+              return plain_operand(inner_res.val);
+            }
+          }
+          assert(false); // unreachable
+        }
+        case UNARY_DEREF: {
+          IrVal* res = gen_expr(cx, expr->unary.expr);
+          return dereferenced_pointer(res);
+        }
+        default:
+          return plain_operand(gen_unary_non_ptr(cx, expr));
+      }
+    }
     case EXPR_VAR:
-      return var(expr->ident);
+      return plain_operand(var(expr->ident));
     case EXPR_FN_CALL: {
       // Generate instructions to evaluate each argument.
       Vec* ir_args = vec_new(sizeof(IrVal));
@@ -512,15 +562,30 @@ static IrVal* gen_expr(Context* cx, AstExpr* expr) {
       };
 
       push_inst(cx->out, ir_fn_call);
-      return dst;
+      return plain_operand(dst);
     }
     case EXPR_CAST: {
       IrVal* inner = gen_expr(cx, expr->cast.expr);
-      return ir_cast(cx, inner, expr->cast.expr->c_type,
-                     expr->cast.target_type);
+      return plain_operand(ir_cast(cx, inner, expr->cast.expr->c_type,
+                     expr->cast.target_type));
     }
     default:
       panic("Unexpected AstExpr type: %lu", expr->ty);
+  }
+}
+
+static IrVal* gen_expr(Context* cx, AstExpr* e) {
+  OperandOrDeref res = gen_expr_inner(cx, e);
+  switch (res.ty) {
+    case PLAIN:
+      return res.val;
+    case DEREF: {
+      printf("e->c_type->ty %u\n", e->c_type->ty);
+      assert(e->c_type->ty == CTYPE_PTR);
+      IrVal* dst = temp(cx, e->c_type->ptr_ref);
+      push_inst(cx->out, unary(IR_LOAD, res.val, dst));
+      return dst;
+    }
   }
 }
 
