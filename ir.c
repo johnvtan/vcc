@@ -135,12 +135,12 @@ typedef struct {
 } OperandOrDeref;
 
 static OperandOrDeref plain_operand(IrVal* val) {
-  return (OperandOrDeref) { .ty = PLAIN, .val = val};
+  return (OperandOrDeref){.ty = PLAIN, .val = val};
 }
 
 static OperandOrDeref dereferenced_pointer(IrVal* val) {
   assert(val->ty != IR_VAL_CONST);
-  return (OperandOrDeref) { .ty = DEREF, .val = val};
+  return (OperandOrDeref){.ty = DEREF, .val = val};
 }
 
 // Corresponds to emit_tacky in the book
@@ -292,9 +292,6 @@ static IrVal* ir_cast(Context* cx, IrVal* val, CType* from, CType* to) {
     return dst;
   }
 
-  // convert between integer types
-  assert(is_integer(from) && is_integer(to));
-
   TypeSize from_size = get_type_size(from);
   TypeSize to_size = get_type_size(to);
 
@@ -318,72 +315,30 @@ static IrVal* ir_cast(Context* cx, IrVal* val, CType* from, CType* to) {
 }
 
 static inline bool is_assign(int bin_op) { return bin_op >= BINARY_ASSIGN; }
-static IrVal* gen_assign(Context* cx, AstExpr* expr) {
-  if (expr->binary.lhs->ty != EXPR_VAR) {
-    panic("Expected var LHS but got %u", expr->binary.lhs->ty);
-  }
+static OperandOrDeref gen_assign(Context* cx, AstExpr* expr) {
+  // Assume that typechecking properly checked expr->lhs to be an lvalue.
 
-  if (expr->binary.op == BINARY_ASSIGN) {
-    // Handle simple assignment.
-    IrVal* lhs = gen_expr(cx, expr->binary.lhs);
-    IrVal* rhs = gen_expr(cx, expr->binary.rhs);
-    push_inst(cx->out, copy(rhs, lhs));
-    return lhs;
-  }
+  assert(expr->binary.op == BINARY_ASSIGN);
 
-  // Compound assignment is a little more complicated.
-  // If there's a cast in the rhs of a compound assign, we need to
-  // do the binary operation into a temp of the common type before
-  // moving the result into the lhs (with a cast or sign extend).
-
-  IrType ir_ty;
-  switch (expr->binary.op) {
-    case BINARY_ADD_ASSIGN:
-      ir_ty = IR_ADD;
-      break;
-    case BINARY_SUB_ASSIGN:
-      ir_ty = IR_SUB;
-      break;
-    case BINARY_MUL_ASSIGN:
-      ir_ty = IR_MUL;
-      break;
-    case BINARY_DIV_ASSIGN:
-      ir_ty = IR_DIV;
-      break;
-    case BINARY_REM_ASSIGN:
-      ir_ty = IR_REM;
-      break;
-    default:
-      panic("Unexpected bin op %u in assign", expr->binary.op);
-  }
-
-  // lhs is ultimately where the result of the expression goes
-  IrVal* lhs = gen_expr(cx, expr->binary.lhs);
+  // Handle simple assignment.
+  OperandOrDeref lhs = gen_expr_inner(cx, expr->binary.lhs);
   IrVal* rhs = gen_expr(cx, expr->binary.rhs);
 
-  CType* lhs_type = expr->binary.lhs->c_type;
-  CType* rhs_type = expr->binary.rhs->c_type;
-
-  if (!c_type_eq(lhs_type, rhs_type)) {
-    // TODO: can we rewrite this to be somewhere else?
-    CType* common_type = get_common_type(lhs_type, rhs_type);
-
-    IrVal* intermediate_dst = temp(cx, common_type);
-    IrVal* intermediate_lhs = ir_cast(cx, lhs, lhs_type, common_type);
-    IrVal* intermediate_rhs = ir_cast(cx, rhs, rhs_type, common_type);
-    push_inst(cx->out, binary(ir_ty, intermediate_lhs, intermediate_rhs,
-                              intermediate_dst));
-
-    // Convert intermediate_dst back to lhs's original type.
-    // Note: I think we could cast directly into lhs here.
-    IrVal* intermediate_dst_casted =
-        ir_cast(cx, intermediate_dst, common_type, lhs_type);
-    push_inst(cx->out, copy(intermediate_dst_casted, lhs));
-  } else {
-    push_inst(cx->out, binary(ir_ty, lhs, rhs, lhs));
+  switch (lhs.ty) {
+    case PLAIN: {
+      // For plain operands, handle them like we used to. Copy them into lhs and
+      // return lhs.
+      push_inst(cx->out, copy(rhs, lhs.val));
+      return lhs;
+    }
+    case DEREF: {
+      // For derefs, store the value in the lhs. Return the rhs because the
+      // result of an assign is the value of the assign, not necessarily the lhs
+      // itself.
+      push_inst(cx->out, unary(IR_STORE, rhs, lhs.val));
+      return plain_operand(rhs);
+    }
   }
-
-  return lhs;
 }
 
 // The caller generates then/else into separate vectors of IR instructions.
@@ -510,7 +465,7 @@ static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr) {
 
         return plain_operand(result);
       } else if (is_assign(expr->binary.op)) {
-        return plain_operand(gen_assign(cx, expr));
+        return gen_assign(cx, expr);
       } else {
         return plain_operand(gen_binary(cx, expr));
       }
@@ -528,14 +483,15 @@ static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr) {
               return plain_operand(dst);
             }
             case DEREF: {
-              // getting the address of a dereferenced pointer returns the inner value.
-              // This means that the dereference is not evaluated at all.
+              // getting the address of a dereferenced pointer returns the inner
+              // value. This means that the dereference is not evaluated at all.
               return plain_operand(inner_res.val);
             }
           }
-          assert(false); // unreachable
+          assert(false);  // unreachable
         }
         case UNARY_DEREF: {
+          // Assume that expr->unary.expr is properly typechecked by this point.
           IrVal* res = gen_expr(cx, expr->unary.expr);
           return dereferenced_pointer(res);
         }
@@ -566,8 +522,8 @@ static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr) {
     }
     case EXPR_CAST: {
       IrVal* inner = gen_expr(cx, expr->cast.expr);
-      return plain_operand(ir_cast(cx, inner, expr->cast.expr->c_type,
-                     expr->cast.target_type));
+      return plain_operand(
+          ir_cast(cx, inner, expr->cast.expr->c_type, expr->cast.target_type));
     }
     default:
       panic("Unexpected AstExpr type: %lu", expr->ty);
@@ -580,9 +536,9 @@ static IrVal* gen_expr(Context* cx, AstExpr* e) {
     case PLAIN:
       return res.val;
     case DEREF: {
-      printf("e->c_type->ty %u\n", e->c_type->ty);
-      assert(e->c_type->ty == CTYPE_PTR);
-      IrVal* dst = temp(cx, e->c_type->ptr_ref);
+      // For deref, create a new temp to store the result of the expression.
+      // Then load into the temp.
+      IrVal* dst = temp(cx, e->c_type);
       push_inst(cx->out, unary(IR_LOAD, res.val, dst));
       return dst;
     }

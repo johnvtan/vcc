@@ -175,21 +175,24 @@ int main(void) {
     assert(st);
   }
 
-TEST("validate deref") {
-  const char* prog = R(int main(void) { int *x; return *x; });
-  AstProgram* ast = parse_ast(lex(string_from(prog)));
-  SymbolTable* st = typecheck_ast(ast);
-  assert(st);
+  TEST("validate deref") {
+    const char* prog = R(int main(void) {
+      int* x;
+      return *x;
+    });
+    AstProgram* ast = parse_ast(lex(string_from(prog)));
+    SymbolTable* st = typecheck_ast(ast);
+    assert(st);
 
-  AstDecl* main_func = first_func(ast);
-  AstBlockItem* b = vec_get(main_func->fn.body, 1);
-  assert(b->ty == BLOCK_STMT);
+    AstDecl* main_func = first_func(ast);
+    AstBlockItem* b = vec_get(main_func->fn.body, 1);
+    assert(b->ty == BLOCK_STMT);
 
-  AstStmt* ret = b->stmt;
-  assert(ret->ty == STMT_RETURN);
-  assert(ret->expr->ty == EXPR_UNARY);
-  assert(ret->expr->c_type->ty == CTYPE_INT);
-}
+    AstStmt* ret = b->stmt;
+    assert(ret->ty == STMT_RETURN);
+    assert(ret->expr->ty == EXPR_UNARY);
+    assert(ret->expr->c_type->ty == CTYPE_INT);
+  }
   printf("Ch 14: all tests pass!\n");
   return 0;
 }
