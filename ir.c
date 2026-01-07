@@ -125,6 +125,10 @@ static inline void push_inst(Vec* out, IrInstruction instr) {
 //
 
 // Corresponds to exp_result in the book
+// Basically, this helps us when generating assigns. For assigns, we want to
+// know if an lhs was some plain operand (like a variable), or a pointer deref.
+// If it's a pointer deref, we have to deal with stores differently: we have to
+// generate an IR_STORE rather than IR_COPY.
 typedef struct {
   enum {
     PLAIN,
@@ -143,8 +147,11 @@ static OperandOrDeref dereferenced_pointer(IrVal* val) {
   return (OperandOrDeref){.ty = DEREF, .val = val};
 }
 
+static OperandOrDeref assign_to(Context* cx, OperandOrDeref lhs, IrVal* rhs);
+
 // Corresponds to emit_tacky in the book
 static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr);
+static IrVal* lvalue_convert(Context* cx, OperandOrDeref op, CType* c_type);
 
 // Corresponds to emit_tacky_and_convert in the book. Basically just
 // calls gen_expr_inner and converts the returned OperandOrDeref into
@@ -174,34 +181,50 @@ static CompTimeConst zero(CType* c_type) {
 }
 
 static IrVal* gen_unary_non_ptr(Context* cx, AstExpr* expr) {
-  IrVal* operand = gen_expr(cx, expr->unary.expr);
+  // Some unary ops assign to the inner expression, in which case we want
+  // to keep the operand's location around. This will enable assignment unary
+  // ops to store to the actual operand location.
+  OperandOrDeref operand_location = gen_expr_inner(cx, expr->unary.expr);
+  IrVal* operand_val = lvalue_convert(cx, operand_location, expr->c_type);
 
-  // Handle pre/postinc unary functions
+  // Handle unary functions which assign (pre/post inc/dec)
   if (expr->unary.op == UNARY_PREINC) {
-    push_inst(cx->out,
-              binary(IR_ADD, operand, constant(one(expr->c_type)), operand));
-    return operand;
+    push_inst(cx->out, binary(IR_ADD, operand_val, constant(one(expr->c_type)),
+                              operand_val));
+    if (operand_location.ty == DEREF) {
+      assign_to(cx, operand_location, operand_val);
+    }
+    return operand_val;
   }
 
   if (expr->unary.op == UNARY_PREDEC) {
-    push_inst(cx->out,
-              binary(IR_SUB, operand, constant(one(expr->c_type)), operand));
-    return operand;
+    push_inst(cx->out, binary(IR_SUB, operand_val, constant(one(expr->c_type)),
+                              operand_val));
+    if (operand_location.ty == DEREF) {
+      assign_to(cx, operand_location, operand_val);
+    }
+    return operand_val;
   }
 
   if (expr->unary.op == UNARY_POSTINC) {
     IrVal* ret = temp(cx, expr->c_type);
-    push_inst(cx->out, copy(operand, ret));
-    push_inst(cx->out,
-              binary(IR_ADD, operand, constant(one(expr->c_type)), operand));
+    push_inst(cx->out, copy(operand_val, ret));
+    push_inst(cx->out, binary(IR_ADD, operand_val, constant(one(expr->c_type)),
+                              operand_val));
+    if (operand_location.ty == DEREF) {
+      assign_to(cx, operand_location, operand_val);
+    }
     return ret;
   }
 
   if (expr->unary.op == UNARY_POSTDEC) {
     IrVal* ret = temp(cx, expr->c_type);
-    push_inst(cx->out, copy(operand, ret));
-    push_inst(cx->out,
-              binary(IR_SUB, operand, constant(one(expr->c_type)), operand));
+    push_inst(cx->out, copy(operand_val, ret));
+    push_inst(cx->out, binary(IR_SUB, operand_val, constant(one(expr->c_type)),
+                              operand_val));
+    if (operand_location.ty == DEREF) {
+      assign_to(cx, operand_location, operand_val);
+    }
     return ret;
   }
 
@@ -209,17 +232,17 @@ static IrVal* gen_unary_non_ptr(Context* cx, AstExpr* expr) {
   IrVal* dst = temp(cx, expr->c_type);
   switch (expr->unary.op) {
     case UNARY_COMPLEMENT:
-      push_inst(cx->out, unary(IR_UNARY_COMPLEMENT, operand, dst));
+      push_inst(cx->out, unary(IR_UNARY_COMPLEMENT, operand_val, dst));
       return dst;
     case UNARY_NEG:
-      push_inst(cx->out, unary(IR_UNARY_NEG, operand, dst));
+      push_inst(cx->out, unary(IR_UNARY_NEG, operand_val, dst));
       return dst;
     case UNARY_NOT: {
       // rewrite UNARY_NOT to be cmp 0, r1
       // Note: be careful to use the inner c_type here to ensure that types are
       // consistent.
       push_inst(cx->out, binary(IR_EQ, constant(zero(expr->unary.expr->c_type)),
-                                operand, dst));
+                                operand_val, dst));
       return dst;
     }
     default:
@@ -315,15 +338,8 @@ static IrVal* ir_cast(Context* cx, IrVal* val, CType* from, CType* to) {
 }
 
 static inline bool is_assign(int bin_op) { return bin_op >= BINARY_ASSIGN; }
-static OperandOrDeref gen_assign(Context* cx, AstExpr* expr) {
-  // Assume that typechecking properly checked expr->lhs to be an lvalue.
-
-  assert(expr->binary.op == BINARY_ASSIGN);
-
+static OperandOrDeref assign_to(Context* cx, OperandOrDeref lhs, IrVal* rhs) {
   // Handle simple assignment.
-  OperandOrDeref lhs = gen_expr_inner(cx, expr->binary.lhs);
-  IrVal* rhs = gen_expr(cx, expr->binary.rhs);
-
   switch (lhs.ty) {
     case PLAIN: {
       // For plain operands, handle them like we used to. Copy them into lhs and
@@ -339,6 +355,14 @@ static OperandOrDeref gen_assign(Context* cx, AstExpr* expr) {
       return plain_operand(rhs);
     }
   }
+}
+
+static OperandOrDeref gen_assign(Context* cx, AstExpr* expr) {
+  // Assume that typechecking properly checked expr->lhs to be an lvalue.
+  assert(expr->binary.op == BINARY_ASSIGN);
+  OperandOrDeref lhs = gen_expr_inner(cx, expr->binary.lhs);
+  IrVal* rhs = gen_expr(cx, expr->binary.rhs);
+  return assign_to(cx, lhs, rhs);
 }
 
 // The caller generates then/else into separate vectors of IR instructions.
@@ -530,19 +554,24 @@ static OperandOrDeref gen_expr_inner(Context* cx, AstExpr* expr) {
   }
 }
 
-static IrVal* gen_expr(Context* cx, AstExpr* e) {
-  OperandOrDeref res = gen_expr_inner(cx, e);
-  switch (res.ty) {
+static IrVal* lvalue_convert(Context* cx, OperandOrDeref op_or_deref,
+                             CType* c_type) {
+  switch (op_or_deref.ty) {
     case PLAIN:
-      return res.val;
+      return op_or_deref.val;
     case DEREF: {
       // For deref, create a new temp to store the result of the expression.
       // Then load into the temp.
-      IrVal* dst = temp(cx, e->c_type);
-      push_inst(cx->out, unary(IR_LOAD, res.val, dst));
+      IrVal* dst = temp(cx, c_type);
+      push_inst(cx->out, unary(IR_LOAD, op_or_deref.val, dst));
       return dst;
     }
   }
+}
+
+static IrVal* gen_expr(Context* cx, AstExpr* e) {
+  OperandOrDeref res = gen_expr_inner(cx, e);
+  return lvalue_convert(cx, res, e->c_type);
 }
 
 static void gen_statement(Context* cx, AstStmt* stmt) {
@@ -767,6 +796,7 @@ IrStaticVariable* gen_static_variable(String* var, SymbolTable* st) {
     return NULL;
   }
   if (st_entry->static_.init.ty == INIT_NONE) {
+    printf("static var %s has init none\n", cstring(var));
     return NULL;
   }
 

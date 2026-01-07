@@ -115,9 +115,20 @@ static StaticInit convert_static_init_to(StaticInit init, CType* target_type) {
     return init;
   }
 
+  // null pointers are stored as ULong(0)
+  CType* stored_type =
+      target_type->ty == CTYPE_PTR ? basic_data_type(CTYPE_ULONG) : target_type;
+
+  // cast_numeric_value checks that if init.c_type is ptr, then the numeric
+  // value must be 0.
+  NumericValue casted =
+      cast_numeric_value(init.numeric, init.c_type, target_type);
+  if (target_type->ty == CTYPE_PTR) {
+    assert(casted.int_ == 0);
+  }
+
   return (StaticInit){
-      .c_type = target_type,
-      .numeric = cast_numeric_value(init.numeric, init.c_type, target_type)};
+      .ty = INIT_HAS_VALUE, .c_type = stored_type, .numeric = casted};
 }
 
 static StaticInit to_static_init(AstExpr* e) {
@@ -309,16 +320,14 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
   // with no previous entries in the symbol table by this point.
   assert(!st_entry);
   if (decl->storage_class == SC_STATIC) {
-    SymbolTableEntry new_entry = {
-        .ty = ST_STATIC_VAR,
-        .c_type = decl->c_type,
-        .static_ = {.global = false,
-                    .init = {
-                        .ty = INIT_HAS_VALUE,
-                        // TODO: should this be decl->c_type?
-                        .c_type = basic_data_type(CTYPE_INT),
-                        .numeric = {0},
-                    }}};
+    SymbolTableEntry new_entry = {.ty = ST_STATIC_VAR,
+                                  .c_type = decl->c_type,
+                                  .static_ = {.global = false,
+                                              .init = {
+                                                  .ty = INIT_HAS_VALUE,
+                                                  .c_type = decl->c_type,
+                                                  .numeric = {0},
+                                              }}};
 
     if (decl->var.init) {
       if (decl->var.init->ty != EXPR_CONST) {
@@ -327,7 +336,10 @@ static void typecheck_local_variable_decl(Context* cx, AstDecl* decl) {
             "but found %d",
             decl->var.init->ty);
       }
-      new_entry.static_.init = to_static_init(decl->var.init);
+      new_entry.static_.init =
+          convert_static_init_to(to_static_init(decl->var.init), decl->c_type);
+      printf("new entry for var %s, ty %u\n", cstring(decl->var.name),
+             new_entry.static_.init.c_type->ty);
     }
 
     symbol_table_put(symbol_table, decl->var.name, new_entry);
