@@ -344,7 +344,9 @@ static OperandOrDeref assign_to(Context* cx, OperandOrDeref lhs, IrVal* rhs) {
     case PLAIN: {
       // For plain operands, handle them like we used to. Copy them into lhs and
       // return lhs.
-      push_inst(cx->out, copy(rhs, lhs.val));
+      if (lhs.val != rhs) {
+        push_inst(cx->out, copy(rhs, lhs.val));
+      }
       return lhs;
     }
     case DEREF: {
@@ -359,10 +361,55 @@ static OperandOrDeref assign_to(Context* cx, OperandOrDeref lhs, IrVal* rhs) {
 
 static OperandOrDeref gen_assign(Context* cx, AstExpr* expr) {
   // Assume that typechecking properly checked expr->lhs to be an lvalue.
-  assert(expr->binary.op == BINARY_ASSIGN);
+  assert(is_assign(expr->binary.op));
   OperandOrDeref lhs = gen_expr_inner(cx, expr->binary.lhs);
   IrVal* rhs = gen_expr(cx, expr->binary.rhs);
-  return assign_to(cx, lhs, rhs);
+
+  if (expr->binary.op == BINARY_ASSIGN) {
+    return assign_to(cx, lhs, rhs);
+  }
+  // Compound assignment is a little more complicated.
+  // If there's a cast in the rhs of a compound assign, we need to
+  // do the binary operation into a temp of the common type before
+  // moving the result into the lhs (with a cast or sign extend).
+
+  IrType ir_ty;
+  switch (expr->binary.op) {
+    case BINARY_ADD_ASSIGN:
+      ir_ty = IR_ADD;
+      break;
+    case BINARY_SUB_ASSIGN:
+      ir_ty = IR_SUB;
+      break;
+    case BINARY_MUL_ASSIGN:
+      ir_ty = IR_MUL;
+      break;
+    case BINARY_DIV_ASSIGN:
+      ir_ty = IR_DIV;
+      break;
+    case BINARY_REM_ASSIGN:
+      ir_ty = IR_REM;
+      break;
+    default:
+      panic("Unexpected bin op %u in assign", expr->binary.op);
+  }
+
+  CType* lhs_type = expr->binary.lhs->c_type;
+
+  // Assume that rhs is already casted to the common type by typecheck.
+  CType* common_type = expr->binary.rhs->c_type;
+
+  // Cast lhs_val to the common type before doing the binary op.
+  IrVal* lhs_val = lvalue_convert(cx, lhs, lhs_type);
+  lhs_val = ir_cast(cx, lhs_val, lhs_type, common_type);
+
+  // Perform lhs_val = lhs_val op rhs
+  // then store into lhs, which in this case may be a location.
+  push_inst(cx->out, binary(ir_ty, lhs_val, rhs, lhs_val));
+
+  // Then cast back to the original type.
+  lhs_val = ir_cast(cx, lhs_val, common_type, lhs_type);
+  return assign_to(cx, lhs, lhs_val);
 }
 
 // The caller generates then/else into separate vectors of IR instructions.

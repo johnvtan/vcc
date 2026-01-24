@@ -471,12 +471,24 @@ static void typecheck_expr(Context* cx, AstExpr* expr) {
         }
       }
       switch (expr->binary.op) {
-        case BINARY_ADD_ASSIGN:
-        case BINARY_SUB_ASSIGN:
         case BINARY_MUL_ASSIGN:
         case BINARY_DIV_ASSIGN:
         case BINARY_REM_ASSIGN:
-          assert(false);
+          if (expr->binary.lhs->c_type->ty == CTYPE_PTR) {
+            panic("LHS of *=, /=, or %= cannot be a pointer.", 1);
+          }
+        case BINARY_ADD_ASSIGN:
+        case BINARY_SUB_ASSIGN:
+          check_lvalue(expr->binary.lhs);
+          CType* common_type =
+              get_common_expr_type(expr->binary.lhs, expr->binary.rhs);
+
+          // Convert rhs to the common type. IR will handle the lhs
+          // cast to the common type when applying the binary operation before
+          // assigning.
+          expr->binary.rhs = convert_to(expr->binary.rhs, common_type);
+          expr->c_type = expr->binary.lhs->c_type;
+          return;
         case BINARY_ASSIGN: {
           // For assigns, implicitly convert rhs to lhs type.
           check_lvalue(expr->binary.lhs);
